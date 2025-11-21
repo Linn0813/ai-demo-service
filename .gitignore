@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 日志
+*.log
+logs/
+
+# 调试数据
+data/debug/
+
+# Node.js / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env.local
+frontend/.env.*.local
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 临时文件
+*.tmp
+*.temp
+
+# 后端构建产物
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/**/*.pyo
+backend/**/*.pyd
+backend/.pytest_cache/
+backend/.coverage
+backend/htmlcov/
+
+# 前端构建产物（保留 dist 用于部署）
+# frontend/dist/  # 如果需要部署，可以保留
+frontend/.vite/
+frontend/.env.local
+frontend/.env.*.local
+
+# 存储目录
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
+backend/storage/knowledge_base/documents/*
+!backend/storage/knowledge_base/documents/.gitkeep
+backend/storage/knowledge_base/vectors/*
+!backend/storage/knowledge_base/vectors/.gitkeep
+
