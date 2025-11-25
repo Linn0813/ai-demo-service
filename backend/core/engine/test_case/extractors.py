@@ -1,19 +1,20 @@
 """需求文档提取相关工具"""
 from __future__ import annotations
 
-import difflib
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.engine.base.config import ExtractionConfig
 from .content_extractor import ContentExtractor
 from core.engine.base.debug_recorder import record_ai_debug
+from .heuristic_extractor import HeuristicExtractor
 from .json_parser import get_project_root, parse_json_with_fallback
 from core.engine.base.llm_service import LLMService
 from .module_hierarchy import ModuleHierarchyDetector
-from .module_matcher import EXPECTED_MODULE_CANONICALS, EXPECTED_MODULE_SEQUENCE, ModuleMatcher
+from .module_hierarchy_builder import ModuleHierarchyBuilder
+from .module_matcher import EXPECTED_MODULE_CANONICALS, ModuleMatcher
+from .module_validator import ModuleValidator
 from .prompts import build_module_extraction_prompt
-from .text_normalizer import MARKDOWN_HEADING_PATTERN, MARKDOWN_HEADING_PATTERN_1_2, RequirementCache
+from .text_normalizer import RequirementCache
 from core.logger import log
 
 # 向后兼容：导出 _parse_json_with_fallback
@@ -40,6 +41,8 @@ class FunctionModuleExtractor:
             module_matcher=self._matcher,
         )
         self._hierarchy_detector = ModuleHierarchyDetector()
+        self._hierarchy_builder = ModuleHierarchyBuilder(normalize_func=self._cache.normalize_text)
+        self._validator = ModuleValidator()
 
     # 对外提供缓存工具方法，方便复用
     def normalize_text(self, text: str) -> str:
@@ -197,83 +200,10 @@ class FunctionModuleExtractor:
                 log.debug("返回的 JSON 结构: %s", list(result.keys()))
 
             # 验证模块名称是否在需求文档中存在
-            validated_modules = []
-            # 明显来自prompt而非需求文档的词汇
-            prompt_keywords = ["功能模块定义", "提取要求", "输出格式", "重要要求", "关键词提取"]
-
-            for module in function_modules_data:
-                module_name = module.get("name", "").strip()
-                if not module_name:
-                    continue
-
-                # 如果模块名称明显来自prompt，直接过滤
-                if any(pk in module_name for pk in prompt_keywords):
-                    log.warning(
-                        "过滤掉来自prompt的模块: '%s' (不是需求文档中的内容)",
-                        module_name
-                    )
-                    continue
-
-                # 检查模块名称或其关键词是否在文档中出现
-                # 使用部分匹配：如果模块名称中的关键词在文档中，也认为有效
-                name_in_doc = module_name in requirement_doc
-                # 提取模块名称中的关键词（去除"模块"等通用词）
-                # 使用更智能的分割，保留有意义的词组
-                # 通用词列表，这些词不应该单独作为验证依据
-                generic_words = {"模块", "功能", "系统", "定义", "要求", "格式", "管理器", "管理"}
-                name_parts = re.split(r'[模块功能系统定义要求格式管理]', module_name)
-                name_keywords = [
-                    kw.strip() for kw in name_parts
-                    if kw and len(kw.strip()) >= 2 and kw.strip() not in generic_words
-                ]
-                # 如果模块名称包含多个词，要求至少有一个完整的、非通用的词组在文档中
-                # 避免单个字母（如"OS"）或通用词误匹配
-                name_keywords_in_doc = any(
-                    kw in requirement_doc and len(kw) >= 3 and kw not in generic_words
-                    for kw in name_keywords
-                ) if name_keywords else False
-                keywords_in_doc = any(
-                    kw in requirement_doc and len(kw) >= 3
-                    for kw in module.get("keywords", [])
-                    if kw and len(kw) >= 2
-                )
-                exact_phrases_in_doc = any(
-                    phrase in requirement_doc
-                    for phrase in module.get("exact_phrases", [])
-                    if phrase and len(phrase) >= 3
-                )
-
-                # 验证逻辑：至少满足以下条件之一
-                # 1. 模块名称完全匹配
-                # 2. 模块名称中的非通用关键词在文档中（且长度>=3）
-                # 3. 模块的keywords在文档中（且长度>=3）
-                # 4. 模块的exact_phrases在文档中
-                # 如果只有通用词匹配，不算有效
-                is_valid = (
-                    name_in_doc or
-                    (name_keywords_in_doc and name_keywords) or  # 确保有非通用关键词
-                    keywords_in_doc or
-                    exact_phrases_in_doc
-                )
-
-                if is_valid:
-                    validated_modules.append(module)
-                else:
-                    log.warning(
-                        "过滤掉臆造的模块: '%s' (在需求文档中未找到相关提及)",
-                        module_name
-                    )
-
-            if len(validated_modules) < len(function_modules_data):
-                log.info(
-                    "验证后保留 %s/%s 个模块（过滤掉 %s 个臆造模块）",
-                    len(validated_modules),
-                    len(function_modules_data),
-                    len(function_modules_data) - len(validated_modules)
-                )
+            validated_modules = self._validator.validate_modules(function_modules_data, requirement_doc)
 
             # 基于规则的后处理：过滤掉明显是子功能的模块
-            filtered_modules = self._filter_sub_function_modules(validated_modules, requirement_doc)
+            filtered_modules = self._validator.filter_sub_function_modules(validated_modules, requirement_doc)
 
             processed_modules = self._post_process_modules(filtered_modules, requirement_doc)
             log.info("提取到 %s 个功能模块（规范化后）", len(processed_modules))
@@ -281,65 +211,12 @@ class FunctionModuleExtractor:
         except Exception as exc:  # noqa: BLE001
             log.error("提取功能模块失败: %s", exc)
             log.debug("异常类型: %s", type(exc).__name__)
-            fallback = self._heuristic_extract_modules(requirement_doc)
+            fallback = HeuristicExtractor.extract_modules(requirement_doc)
             if fallback:
                 log.info("使用启发式提取功能模块，得到 %s 个模块", len(fallback))
                 return self._post_process_modules(fallback, requirement_doc)
             raise
 
-    def _filter_sub_function_modules(self, modules: List[Dict[str, Any]], requirement_doc: str) -> List[Dict[str, Any]]:
-        """
-        基于规则过滤掉明显是子功能的模块
-
-        规则：
-        1. 状态类模块（如"存在有效数据"、"无有效数据"）应该归属于"判断条件"或"状态"模块
-        2. 数据类模块（如"存在数据"、"无工作日数据"）应该归属于相关模块
-        3. 如果模块名称是其他模块的子集，且位置接近，应该合并
-        """
-        if not modules:
-            return []
-
-        # 定义明显是子功能的模式
-        sub_function_patterns = [
-            r"^(存在|无|有|没有).*数据$",  # "存在有效数据"、"无有效数据"等
-            r"^(存在|无|有|没有).*$",  # "存在数据"、"无工作日数据"等（但排除主模块）
-        ]
-
-        # 定义主模块关键词（这些模块不应该被过滤）
-        main_module_keywords = ["判断条件", "状态", "详情", "设置", "弹窗", "卡片", "信息", "社交时差"]
-
-        filtered = []
-        for module in modules:
-            module_name = module.get("name", "").strip()
-            if not module_name:
-                continue
-
-            # 检查是否包含主模块关键词（如果是"判断条件"、"状态"等，不应该过滤）
-            if any(keyword in module_name for keyword in main_module_keywords):
-                filtered.append(module)
-                continue
-
-            # 检查是否是明显子功能
-            is_sub_function = False
-            for pattern in sub_function_patterns:
-                if re.match(pattern, module_name):
-                    is_sub_function = True
-                    log.info(
-                        "过滤掉子功能模块: '%s' (匹配模式: %s)",
-                        module_name, pattern
-                    )
-                    break
-
-            if not is_sub_function:
-                filtered.append(module)
-
-        if len(filtered) < len(modules):
-            log.info(
-                "基于规则过滤: 保留 %s/%s 个模块（过滤掉 %s 个子功能模块）",
-                len(filtered), len(modules), len(modules) - len(filtered)
-            )
-
-        return filtered
 
     def extract_function_modules_with_content(self, requirement_doc: str, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """提取功能模块并匹配原文内容。"""
@@ -368,78 +245,124 @@ class FunctionModuleExtractor:
         sorted_modules = sorted(modules, key=lambda m: module_positions.get(m.get("name", ""), 999999))
 
         # 识别主模块和子模块的关系
-        # 规则：
-        # 1. 主模块通常是文档中的二级标题（##），如"## 社交时差"
-        # 2. 子模块通常是三级标题（###），且位置在主模块之后，如"### 详情信息半弹窗"
-        # 3. 更精确的子模块关键词匹配：必须是独立的子功能单元，而不是主模块名称的一部分
-        main_modules = []  # 主模块列表
-        module_hierarchy = {}  # {module_name: parent_module_name}
+        # 优先使用AI输出的层次关系，如果AI没有提供或提供不完整，则使用代码规则补充
+        main_modules: List[str] = []
+        module_hierarchy: Dict[str, str] = {}
 
-        # 更精确的子模块关键词：必须是独立的子功能单元
-        # 注意：避免误判，如"睡眠类型详情区域"中的"详情"不应该触发子模块判断
-        sub_module_keywords = ["半弹窗", "弹窗", "设置", "规则定义", "算法规则", "文案解释"]
-
-        # 检查模块在文档中的标题级别（## vs ###）
-        def get_module_title_level(module_name: str, anchor_index: int) -> int:
-            """检查模块在文档中的标题级别：2表示##，3表示###"""
-            if anchor_index >= len(doc_lines):
-                return 0
-            line = doc_lines[anchor_index].strip()
-            if line.startswith("## "):
-                return 2
-            elif line.startswith("### "):
-                return 3
-            return 0
-
-        for i, module in enumerate(sorted_modules):
+        # 获取所有模块名称集合，用于验证父模块是否存在
+        all_module_names = {m.get("name", "") for m in sorted_modules if m.get("name")}
+        
+        # 第一步：从AI输出中提取层次关系
+        ai_provided_hierarchy = {}  # 记录AI提供的层次关系
+        log.info("=== 开始提取AI输出的层次关系 ===")
+        for module in sorted_modules:
             module_name = module.get("name", "")
             if not module_name:
                 continue
 
-            anchor_index = module_positions[module_name]
-            title_level = self._get_module_title_level(doc_lines, anchor_index)
-
-            # 如果模块是二级标题（##），一定是主模块
-            if title_level == 2:
+            # 检查AI是否输出了层次关系
+            ai_is_main = module.get("is_main_module")
+            ai_parent = module.get("parent_module")
+            
+            log.info("模块 '%s': AI输出 is_main_module=%s, parent_module=%s", module_name, ai_is_main, ai_parent)
+            
+            if ai_is_main is True:
+                # AI明确标记为主模块
                 main_modules.append(module_name)
+                log.info("✓ AI标记为主模块: %s", module_name)
+            elif ai_is_main is False and ai_parent:
+                # AI明确标记为子模块，且有父模块
+                # 验证父模块是否存在
+                if ai_parent in all_module_names:
+                    module_hierarchy[module_name] = ai_parent
+                    ai_provided_hierarchy[module_name] = ai_parent
+                    log.info("✓ AI标记为子模块: %s -> %s", module_name, ai_parent)
+                else:
+                    log.warning("✗ AI输出的父模块 '%s' 不存在，忽略该层次关系: %s -> %s", ai_parent, module_name, ai_parent)
+            elif ai_is_main is False and ai_parent is None:
+                log.info("? AI标记为子模块但无父模块: %s (将使用代码规则判断)", module_name)
+            # 如果 ai_is_main 是 None，则使用代码规则判断
+        
+        log.info("=== AI层次关系提取完成: 主模块 %s 个, 子模块 %s 个 ===", len(main_modules), len(module_hierarchy))
+        log.info("AI提取的主模块列表: %s", main_modules)
+        log.info("AI提取的子模块层次关系: %s", module_hierarchy)
+        
+        # 第二步：对于AI没有明确判断的模块，使用代码规则补充
+        # 检查哪些模块AI没有提供层次关系（包括 is_main_module 为 None 或 False 但 parent_module 为 None 的情况）
+        modules_without_ai_hierarchy = []
+        for m in sorted_modules:
+            module_name = m.get("name", "")
+            if not module_name:
+                continue
+            ai_is_main = m.get("is_main_module")
+            ai_parent = m.get("parent_module")
+            
+            # 如果AI已经提供了明确的层次关系（is_main_module=True 或 (is_main_module=False and parent_module存在)），跳过
+            if ai_is_main is True:
+                log.info("AI已提供层次关系（主模块）: %s，跳过代码规则判断", module_name)
+                continue
+            elif ai_is_main is False and ai_parent:
+                log.info("AI已提供层次关系（子模块）: %s -> %s，跳过代码规则判断", module_name, ai_parent)
                 continue
 
-            # 检查是否是子模块（更精确的匹配）
-            # 必须是：1) 包含子模块关键词 2) 且是三级标题（###）
-            is_sub_module = False
-            if title_level == 3:
-                # 检查是否包含子模块关键词（精确匹配，避免误判）
-                for keyword in sub_module_keywords:
-                    if keyword in module_name:
-                        is_sub_module = True
-                        break
-                # 如果模块名称很短（<=配置的阈值）且包含关键词，更可能是子模块
-                if not is_sub_module and len(module_name) <= ExtractionConfig.SHORT_MODULE_NAME_LENGTH:
-                    short_keywords = ["弹窗", "设置", "规则", "定义", "解释"]
-                    if any(kw in module_name for kw in short_keywords):
-                        is_sub_module = True
-
-            # 查找可能的主模块（位置在当前模块之前，且是二级标题）
-            parent_module = None
-            if is_sub_module:
-                for j in range(i - 1, -1, -1):
-                    prev_module = sorted_modules[j]
-                    prev_name = prev_module.get("name", "")
-                    if not prev_name:
-                        continue
-                    prev_anchor = module_positions[prev_name]
-                    prev_title_level = self._get_module_title_level(doc_lines, prev_anchor)
-
-                    # 如果前一个模块是二级标题（##），且位置接近（相差不超过配置的最大距离）
-                    if prev_title_level == 2 and anchor_index - prev_anchor <= ExtractionConfig.SUB_MODULE_MAX_DISTANCE:
-                        parent_module = prev_name
-                        break
-
-            if parent_module:
-                module_hierarchy[module_name] = parent_module
+            # 如果AI没有明确判断（is_main_module 为 None），或者AI标记为子模块但没有父模块
+            if ai_is_main is None:
+                modules_without_ai_hierarchy.append(m)
+                log.info("AI未提供层次关系: %s (is_main_module=None)", module_name)
+            elif ai_is_main is False and ai_parent is None:
+                # AI标记为子模块但没有父模块，可能是独立的子模块，也使用代码规则判断
+                modules_without_ai_hierarchy.append(m)
+                log.info("AI标记为子模块但无父模块，使用代码规则判断: %s", module_name)
+        
+        if modules_without_ai_hierarchy:
+            log.info("AI未提供层次关系的模块数量: %s，使用代码规则补充", len(modules_without_ai_hierarchy))
+            log.info("需要代码规则补充的模块: %s", [m.get("name") for m in modules_without_ai_hierarchy])
+            # 只对这些模块使用代码规则判断
+            # 注意：build_hierarchy 需要所有模块的信息来判断层次关系，所以传入所有模块
+            # 但只对 modules_without_ai_hierarchy 中的模块使用代码规则的结果
+            code_main_modules, code_hierarchy = self._hierarchy_builder.build_hierarchy(
+                sorted_modules, module_positions, doc_lines
+            )
+            # 合并AI和代码的结果（AI的结果优先）
+            # 只对AI未提供层次关系的模块使用代码规则的结果
+            modules_without_names = {m.get("name") for m in modules_without_ai_hierarchy if m.get("name")}
+            log.info("AI已提供层次关系的模块: %s", [name for name in all_module_names if name not in modules_without_names])
+            log.info("代码规则返回的主模块: %s", code_main_modules)
+            log.info("代码规则返回的层次关系: %s", code_hierarchy)
+            # 记录AI已提供的层次关系，防止被代码规则覆盖
+            ai_provided_main_modules = set(main_modules)
+            ai_provided_hierarchy_set = set(module_hierarchy.keys())
+            
+            for module_name in code_main_modules:
+                if module_name in modules_without_names and module_name not in main_modules:
+                    # 确保不在AI已提供的层次关系中
+                    if module_name not in ai_provided_hierarchy_set:
+                        main_modules.append(module_name)
+                        log.info("代码规则补充主模块: %s", module_name)
+                    else:
+                        log.warning("跳过代码规则的主模块判断 '%s'（AI已将其标记为子模块）", module_name)
+                elif module_name not in modules_without_names:
+                    log.debug("跳过代码规则的主模块判断 '%s'（AI已提供层次关系）", module_name)
+                elif module_name in ai_provided_hierarchy_set:
+                    log.warning("跳过代码规则的主模块判断 '%s'（AI已将其标记为子模块）", module_name)
+            
+            for module_name, parent_name in code_hierarchy.items():
+                if module_name in modules_without_names and module_name not in module_hierarchy:
+                    # 确保不在AI已提供的主模块列表中
+                    if module_name not in ai_provided_main_modules:
+                        module_hierarchy[module_name] = parent_name
+                        log.info("代码规则补充子模块: %s -> %s", module_name, parent_name)
+                    else:
+                        log.warning("跳过代码规则的子模块判断 '%s -> %s'（AI已将其标记为主模块）", module_name, parent_name)
+                elif module_name not in modules_without_names:
+                    log.debug("跳过代码规则的层次关系判断 '%s -> %s'（AI已提供层次关系）", module_name, parent_name)
+                elif module_name in ai_provided_main_modules:
+                    log.warning("跳过代码规则的子模块判断 '%s -> %s'（AI已将其标记为主模块）", module_name, parent_name)
             else:
-                # 没有父模块，是主模块
-                main_modules.append(module_name)
+                # AI已经提供了完整的层次关系，使用AI的结果
+                log.info("=== 使用AI输出的模块层次关系: 主模块 %s 个, 子模块 %s 个 ===", len(main_modules), len(module_hierarchy))
+                log.info("主模块列表: %s", main_modules)
+                log.info("子模块层次关系: %s", module_hierarchy)
 
         result = []
         for idx, module in enumerate(sorted_modules, start=1):
@@ -448,13 +371,20 @@ class FunctionModuleExtractor:
                 continue
             anchor_index = module_positions[module_name]
             matched_content = self.extract_relevant_section(requirement_doc, module_name, module)
+            
+            # 准备模块信息，包含层次关系
+            module_with_hierarchy = module.copy()
+            module_with_hierarchy["parent_module"] = module_hierarchy.get(module_name)
+            module_with_hierarchy["is_main_module"] = module_name in main_modules
+            
             refined_content, matched_positions = self._content_extractor.refine_matched_content(
                 requirement_doc,
                 module_name,
-                module,
+                module_with_hierarchy,
                 anchor_index,
                 matched_content,
                 all_modules=sorted_modules,  # 传递所有模块信息
+                module_hierarchy=module_hierarchy,  # 传递层次关系
             )
 
             match_confidence = "low"
@@ -463,9 +393,12 @@ class FunctionModuleExtractor:
             elif module.get("keywords"):
                 match_confidence = "medium"
 
-            # 判断是否是主模块
+            # 判断是否是主模块（使用最终的层次关系）
             is_main = module_name in main_modules
             parent_module = module_hierarchy.get(module_name)
+            
+            # 记录最终结果，用于调试
+            log.debug("模块 '%s' 最终结果: is_main_module=%s, parent_module=%s", module_name, is_main, parent_module)
 
             result.append({
                 "id": f"module_{idx}",
@@ -480,6 +413,10 @@ class FunctionModuleExtractor:
                 "is_main_module": is_main,
                 "parent_module": parent_module,
             })
+        
+        log.info("=== 最终结果构建完成: 共 %s 个模块 ===", len(result))
+        log.info("最终主模块列表: %s", main_modules)
+        log.info("最终子模块层次关系: %s", module_hierarchy)
 
         log.info("提取到 %s 个功能模块并完成原文匹配", len(result))
 
@@ -618,6 +555,9 @@ class FunctionModuleExtractor:
                     "section_hint": module.get("section_hint", "").strip() or (canonical_name or raw_name),
                     "exact_phrases": [],
                     "__position": module_position,
+                    # 保留AI输出的层次关系字段
+                    "is_main_module": module.get("is_main_module"),
+                    "parent_module": module.get("parent_module"),
                 }
                 grouped[key] = entry
             else:
@@ -630,6 +570,11 @@ class FunctionModuleExtractor:
                         entry["description"] = new_desc
                     # 更新位置为更早的位置
                     entry["__position"] = min(entry["__position"], module_position)
+                    # 保留AI输出的层次关系字段（如果entry中没有，则使用module中的）
+                    if entry.get("is_main_module") is None:
+                        entry["is_main_module"] = module.get("is_main_module")
+                    if entry.get("parent_module") is None:
+                        entry["parent_module"] = module.get("parent_module")
                     log.debug(
                         "模块去重: %s 和 %s 位置接近 (%s vs %s)，合并为一个模块",
                         entry["name"], raw_name, entry["__position"], module_position
@@ -646,6 +591,9 @@ class FunctionModuleExtractor:
                             "section_hint": module.get("section_hint", "").strip() or (canonical_name or raw_name),
                             "exact_phrases": [],
                             "__position": module_position,
+                            # 保留AI输出的层次关系字段
+                            "is_main_module": module.get("is_main_module"),
+                            "parent_module": module.get("parent_module"),
                         }
                         grouped[position_key] = entry
                     else:
@@ -655,6 +603,11 @@ class FunctionModuleExtractor:
                         if new_desc and len(new_desc) > len(entry.get("description", "")):
                             entry["description"] = new_desc
                         entry["__position"] = min(entry["__position"], module_position)
+                        # 保留AI输出的层次关系字段（如果entry中没有，则使用module中的）
+                        if entry.get("is_main_module") is None:
+                            entry["is_main_module"] = module.get("is_main_module")
+                        if entry.get("parent_module") is None:
+                            entry["parent_module"] = module.get("parent_module")
 
                 # 更新canonical名称和section_hint
                 if canonical_name:
@@ -769,144 +722,3 @@ class FunctionModuleExtractor:
             requirement_doc, module_name, module_data, anchor_index, fallback_section, all_modules
         )
 
-    # === 启发式提取逻辑 ===
-    def _heuristic_extract_modules(self, requirement_doc: str) -> List[Dict[str, Any]]:
-        """在LLM失败时，基于标题和关键词的启发式提取。"""
-
-        lines = requirement_doc.splitlines()
-        candidates: List[Tuple[int, str]] = []
-        seen: set[str] = set()
-
-        for idx, line in enumerate(lines):
-            stripped = line.strip()
-            if not stripped:
-                continue
-
-            # 使用更严格的过滤规则
-            if self._looks_like_module_heading(stripped, idx, lines) and stripped not in seen:
-                candidates.append((idx, stripped))
-                seen.add(stripped)
-
-        # 按位置排序，确保顺序
-        candidates.sort(key=lambda x: x[0])
-
-        modules: List[Dict[str, Any]] = []
-        for idx, heading in candidates:
-            # 收集该模块下的描述内容（直到下一个模块标题）
-            description_lines: List[str] = []
-            for offset in range(1, min(20, len(lines) - idx)):
-                if idx + offset >= len(lines):
-                    break
-                desc_line = lines[idx + offset].strip()
-                if not desc_line:
-                    continue
-                # 如果遇到下一个模块标题，停止收集
-                if self._looks_like_module_heading(desc_line, idx + offset, lines):
-                    break
-                # 跳过编号行和图片标记
-                if desc_line.startswith(('[图片]', '图片')):
-                    continue
-                if re.match(r'^\d+[\.、]', desc_line):
-                    continue
-                description_lines.append(desc_line)
-                if len(description_lines) >= 5:  # 限制描述长度
-                    break
-
-            modules.append({
-                "name": heading,
-                "description": " ".join(description_lines[:3]) if description_lines else heading,
-                "keywords": self._extract_keywords_from_heading(heading),
-                "exact_phrases": [heading],
-                "section_hint": heading[:10] if len(heading) > 10 else heading,
-            })
-
-        log.info("启发式提取识别到 %s 个候选模块，过滤后保留 %s 个", len(candidates), len(modules))
-        return modules
-
-    @staticmethod
-    def _looks_like_module_heading(text: str, line_idx: int, all_lines: List[str]) -> bool:
-        """判断文本是否像功能模块标题（更严格的规则）。"""
-
-        # 过滤规则1: 长度限制（太短或太长都不像模块标题）
-        if len(text) < 3 or len(text) > 30:
-            return False
-
-        # 过滤规则2: 排除明显的非标题内容
-        if text.startswith(('*', '-', '[', '（', '(', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '0.')):
-            return False
-
-        # 过滤规则3: 排除看起来像问题的行
-        if text.endswith('？') or text.endswith('?'):
-            return False
-        if '是否' in text or '能否' in text or '如何' in text:
-            return False
-
-        # 过滤规则4: 排除单个数字或编号
-        if re.match(r'^\d+[\.、]?\s*$', text):
-            return False
-
-        # 过滤规则5: 排除看起来像选项的行（如 "A. "、"B. "）
-        if re.match(r'^[A-Z][\.、]\s*', text):
-            return False
-
-        # 过滤规则6: 排除包含太多标点的行（可能是描述而非标题）
-        punctuation_count = sum(1 for c in text if c in '，。、；：！？')
-        if punctuation_count > 2:
-            return False
-
-        # 过滤规则7: 排除以冒号结尾的标题（通常是描述性内容，如"弹窗调用逻辑："）
-        if text.endswith('：') or text.endswith(':'):
-            return False
-
-        # 过滤规则8: 排除文档结构性的标题（通过模式识别而非具体词汇）
-        # 排除包含"说明"、"范围"、"涉及"、"机制"等结构性词汇的标题
-        structural_patterns = ["说明", "范围", "涉及", "机制", "输出", "选择", "时间", "方式"]
-        if any(pattern in text and len(text) <= 8 for pattern in structural_patterns):
-            return False
-
-        # 过滤规则9: 排除问题性的标题（如"邀请您对...功能评分"）
-        if '邀请' in text and ('评分' in text or '评价' in text):
-            return False
-        if '请根据' in text or '请回答' in text:
-            return False
-
-        # 过滤规则10: 排除纯描述性的短句（如"海外版是第二份问卷："）
-        if '是' in text and len(text) < 15 and ('是' in text[:5] or text.endswith('：')):
-            return False
-
-        # 正向规则1: 包含与功能模块相关的通用关键词，但必须是核心词
-        core_indicators = ["模块", "功能", "弹窗", "对话", "中心", "系统", "平台"]
-        has_core_indicator = any(indicator in text for indicator in core_indicators)
-
-        # 正向规则2: 包含大写缩写或英文字母组合（常见于模块命名）
-        has_uppercase_abbr = bool(re.search(r"[A-Z]{2,}", text))
-
-        # 正向规则3: 独立行且前后有空行（更可能是标题）
-        is_isolated = False
-        if line_idx > 0 and line_idx < len(all_lines) - 1:
-            prev_line = all_lines[line_idx - 1].strip()
-            next_line = all_lines[line_idx + 1].strip() if line_idx + 1 < len(all_lines) else ""
-            # 如果前后都是空行，或者前一行很短，更可能是标题
-            if (not prev_line or len(prev_line) < 5) and (not next_line or not next_line.startswith(('1.', '2.', '3.'))):
-                is_isolated = True
-
-        # 必须满足：有核心指示词或大写缩写，且是独立行，且长度适中
-        if (has_core_indicator or has_uppercase_abbr) and is_isolated and 4 <= len(text) <= 25:
-            return True
-
-        # 特殊情况：如果包含大写缩写且长度很短（2-8字符），可能是模块名
-        if has_uppercase_abbr and 2 <= len(text) <= 8:
-            return True
-
-        return False
-
-    @staticmethod
-    def _extract_keywords_from_heading(heading: str) -> List[str]:
-        """从标题中提取关键词。"""
-        tokens = [token for token in re.split(r"[^A-Za-z0-9\u4e00-\u9fa5]+", heading) if token]
-        keywords = [token for token in tokens if len(token) >= 2]
-
-        if not keywords:
-            keywords.append(heading)
-
-        return keywords[:5]

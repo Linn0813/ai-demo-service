@@ -19,6 +19,10 @@
           <el-icon><MagicStick /></el-icon>
           <span>测试用例生成</span>
         </el-menu-item>
+        <el-menu-item index="/ai/knowledge-base">
+          <el-icon><Reading /></el-icon>
+          <span>知识库问答</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -29,6 +33,9 @@
         <template v-if="route.name === 'AITestCaseGenerate'">
           <el-breadcrumb-item>AI 测试用例生成</el-breadcrumb-item>
         </template>
+        <template v-else-if="route.name === 'KnowledgeBase'">
+          <el-breadcrumb-item>知识库问答</el-breadcrumb-item>
+        </template>
       </el-breadcrumb>
       <router-view />
     </el-main>
@@ -36,7 +43,7 @@
 </template>
 
 <script setup>
-import { Cpu, MagicStick } from '@element-plus/icons-vue'
+import { Cpu, MagicStick, Reading } from '@element-plus/icons-vue'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 

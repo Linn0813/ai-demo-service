@@ -39,6 +39,7 @@ class ContentExtractor:
         initial_end_idx: int,
         other_module_tokens: List[str],
         sections: Optional[List[Tuple[int, str]]] = None,
+        main_module_tokens: Optional[List[str]] = None,
     ) -> Tuple[int, bool]:
         """
         查找模块边界（结束位置）
@@ -49,6 +50,7 @@ class ContentExtractor:
             initial_end_idx: 初始结束位置（章节边界）
             other_module_tokens: 其他模块的标识符列表
             sections: 章节列表（可选）
+            main_module_tokens: 主模块标识符列表（可选，如果提供则只检测主模块作为边界）
 
         Returns:
             (module_end_idx, found_next_module)
@@ -58,6 +60,9 @@ class ContentExtractor:
 
         # 扩大搜索范围，确保能找到下一个模块（即使它在 initial_end_idx 之后）
         search_end = min(len(doc_lines), initial_end_idx + ExtractionConfig.MODULE_SEARCH_EXTEND_RANGE)
+
+        # 如果提供了主模块标识符，优先使用主模块标识符；否则使用所有模块标识符
+        tokens_to_check = main_module_tokens if main_module_tokens else other_module_tokens
 
         for idx in range(anchor_index + 1, search_end):
             line = doc_lines[idx].strip()
@@ -71,21 +76,32 @@ class ContentExtractor:
             if markdown_match:
                 heading_text = markdown_match.group(1).strip()
                 normalized_heading = self._normalize_identifier(heading_text)
+                
+                # 检查标题级别：二级标题（##）通常是主模块，三级标题（###）通常是子模块
+                title_level = 2 if line.startswith("## ") and not line.startswith("### ") else 3
+                
+                # 如果提供了主模块标识符，只检测二级标题作为边界
+                if main_module_tokens and title_level != 2:
+                    continue
+                
                 # 检查是否是其他模块的标题
-                for token in other_module_tokens:
+                for token in tokens_to_check:
                     if normalized_heading == token:
                         module_end_idx = idx
                         found_next_module = True
                         log.debug(
-                            "找到下一个模块边界（Markdown格式）: anchor_index=%s, next_module_at=%s, module_end_idx=%s, heading=%s",
-                            anchor_index, idx, module_end_idx, heading_text
+                            "找到下一个模块边界（Markdown格式）: anchor_index=%s, next_module_at=%s, module_end_idx=%s, heading=%s, level=%s",
+                            anchor_index, idx, module_end_idx, heading_text, title_level
                         )
                         break
                 if found_next_module:
                     break
 
             # 检测其他模块标题（普通格式）
-            if self._is_module_title_line(normalized_line, other_module_tokens):
+            # 如果提供了主模块标识符，只检测主模块
+            if self._is_module_title_line(normalized_line, tokens_to_check):
+                # 对于普通格式，如果提供了主模块标识符，需要额外检查是否是主模块
+                # 这里假设普通格式的标题如果匹配主模块标识符，就是主模块
                 module_end_idx = idx
                 found_next_module = True
                 log.debug(
@@ -110,11 +126,68 @@ class ContentExtractor:
 
         if not found_next_module:
             log.debug(
-                "未找到下一个模块边界: anchor_index=%s, search_end=%s, other_module_tokens=%s",
-                anchor_index, search_end, other_module_tokens[:5]  # 只显示前5个
+                "未找到下一个模块边界: anchor_index=%s, search_end=%s, tokens_checked=%s",
+                anchor_index, search_end, len(tokens_to_check)
             )
 
         return module_end_idx, found_next_module
+
+    def _get_title_level(self, doc_lines: List[str], line_index: int) -> int:
+        """
+        获取指定行的标题级别
+        
+        Args:
+            doc_lines: 文档行列表
+            line_index: 行索引
+            
+        Returns:
+            标题级别：2表示##，3表示###，0表示不是标题
+        """
+        if line_index >= len(doc_lines):
+            return 0
+        line = doc_lines[line_index].strip()
+        if line.startswith("## ") and not line.startswith("### "):
+            return 2
+        elif line.startswith("### "):
+            return 3
+        return 0
+
+    def _find_parent_module_end(
+        self,
+        doc_lines: List[str],
+        parent_anchor: int,
+        other_tokens: List[str],
+        main_module_tokens: Optional[List[str]] = None,
+    ) -> int:
+        """
+        查找父模块的结束位置（下一个主模块的开始位置）
+        
+        Args:
+            doc_lines: 文档行列表
+            parent_anchor: 父模块的锚点位置
+            other_tokens: 其他模块的标识符列表
+            main_module_tokens: 主模块标识符列表（可选，如果提供则只检测主模块）
+            
+        Returns:
+            父模块的结束位置（行索引）
+        """
+        search_end = min(len(doc_lines), parent_anchor + ExtractionConfig.MAIN_MODULE_SEARCH_EXTEND_RANGE)
+        tokens_to_check = main_module_tokens if main_module_tokens else other_tokens
+        
+        for idx in range(parent_anchor + 1, search_end):
+            line = doc_lines[idx].strip()
+            if not line:
+                continue
+            # 检查是否是二级标题（##），二级标题通常是主模块
+            markdown_match = MARKDOWN_HEADING_PATTERN_1_2.match(line)
+            if markdown_match:
+                heading_text = markdown_match.group(1).strip()
+                normalized_heading = self._normalize_identifier(heading_text)
+                # 检查是否是其他主模块的标题
+                if normalized_heading in tokens_to_check:
+                    return idx
+        # 没有找到下一个主模块，返回文档结束位置
+        return len(doc_lines)
 
     def trim_content_at_module_boundary(
         self,
@@ -244,6 +317,7 @@ class ContentExtractor:
         anchor_index: int,
         fallback_section: str,
         all_modules: Optional[List[Dict[str, Any]]] = None,
+        module_hierarchy: Optional[Dict[str, str]] = None,
     ) -> Tuple[str, List[int]]:
         """
         精确提取模块对应的原文内容
@@ -419,6 +493,54 @@ class ContentExtractor:
             # 合并预定义的标识符和实际提取的模块标识符
             other_tokens = list(set(other_tokens + other_module_tokens))
 
+        # 准备主模块标识符列表（用于边界检测，只检测主模块作为边界）
+        main_module_tokens = None
+        if all_modules:
+            main_module_names = []
+            for other_module in all_modules:
+                other_name = other_module.get("name", "")
+                if other_name and other_name != module_name:
+                    # 检查是否是主模块（通过 is_main_module 字段或 parent_module 字段）
+                    is_main = other_module.get("is_main_module", False)
+                    has_parent = other_module.get("parent_module") or (module_hierarchy.get(other_name) if module_hierarchy else None)
+                    if is_main or not has_parent:
+                        main_module_names.append(other_name)
+            
+            if main_module_names:
+                main_module_tokens = []
+                for main_name in main_module_names:
+                    normalized_main = self._normalize_identifier(main_name)
+                    if normalized_main and normalized_main not in main_module_tokens:
+                        main_module_tokens.append(normalized_main)
+
+        # 检查当前模块是否是子模块（通过检查是否有父模块）
+        is_current_sub_module = False
+        parent_module_end = None
+        parent_module_name = module_data.get("parent_module") or (module_hierarchy.get(module_name) if module_hierarchy else None)
+        
+        if parent_module_name and all_modules:
+            # 当前模块是子模块，需要找到父模块的结束位置
+            for other_module in all_modules:
+                other_name = other_module.get("name", "")
+                if other_name == parent_module_name:
+                    # 找到父模块的锚点位置
+                    parent_anchor = self._module_matcher.find_first_occurrence_line(
+                        parent_module_name,
+                        other_module,
+                        doc_lines,
+                    )
+                    if parent_anchor >= 0:
+                        # 找到父模块的结束位置（下一个主模块的开始位置）
+                        parent_module_end = self._find_parent_module_end(
+                            doc_lines, parent_anchor, other_tokens, main_module_tokens=main_module_tokens
+                        )
+                        is_current_sub_module = True
+                        log.debug(
+                            "模块 %s: 识别为子模块（父模块: %s），父模块结束位置在第 %s 行",
+                            module_name, parent_module_name, parent_module_end + 1 if parent_module_end else "未知"
+                        )
+                    break
+
         # 查找模块边界（结束位置）
         initial_end_idx = end_idx  # 保存初始的章节边界
         module_end_idx, found_next_module = self.find_module_boundary(
@@ -427,6 +549,7 @@ class ContentExtractor:
             initial_end_idx,
             other_tokens,
             sections,
+            main_module_tokens=main_module_tokens,  # 传入主模块标识符，只检测主模块作为边界
         )
 
         # 使用更精确的模块结束位置
@@ -447,7 +570,15 @@ class ContentExtractor:
                     module_name
                 )
 
-        if found_next_module and not is_next_module_sub:
+        # 如果是子模块，限制内容范围在父模块内
+        if is_current_sub_module and parent_module_end is not None:
+            # 子模块的内容不能超过父模块的结束位置
+            end_idx = min(end_idx, parent_module_end)
+            log.debug(
+                "模块 %s: 子模块内容限制在父模块范围内，结束位置: %s",
+                module_name, end_idx + 1
+            )
+        elif found_next_module and not is_next_module_sub:
             # 找到了下一个模块，且不是子模块，module_end_idx 是下一个模块的开始位置（行号）
             # Python 切片是左闭右开的，所以 doc_lines[start_idx:module_end_idx]
             # 会包含索引 start_idx 到 module_end_idx-1 的行

@@ -16,6 +16,12 @@ const routes = [
         name: 'AITestCaseGenerate',
         component: () => import('../views/ai/AITestCaseGenerate.vue'),
         meta: { title: 'AI测试用例生成' }
+      },
+      {
+        path: 'knowledge-base',
+        name: 'KnowledgeBase',
+        component: () => import('../views/ai/KnowledgeBase.vue'),
+        meta: { title: '知识库问答' }
       }
     ]
   }

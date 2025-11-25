@@ -262,6 +262,14 @@
               <el-table-column type="expand">
                 <template #default="{ row }">
                   <div class="expand-section">
+                    <div class="expand-block" v-if="row.sub_module">
+                      <h4>子功能点</h4>
+                      <p>{{ row.sub_module }}</p>
+                    </div>
+                    <div class="expand-block">
+                      <h4>前置条件</h4>
+                      <p>{{ row.preconditions || '无' }}</p>
+                    </div>
                     <div class="expand-block">
                       <h4>测试步骤</h4>
                       <ol>
@@ -270,25 +278,20 @@
                         </li>
                       </ol>
                     </div>
-                    <div class="expand-block">
-                      <h4>前置条件</h4>
-                      <p>{{ row.preconditions || '无' }}</p>
-                    </div>
                   </div>
                 </template>
               </el-table-column>
+              <el-table-column prop="module_name" label="所属模块" min-width="150" />
+              <el-table-column prop="sub_module" label="子功能点" min-width="120" :show-overflow-tooltip="true">
+                <template #default="{ row }">
+                  <span v-if="row.sub_module" class="sub-module-tag">{{ row.sub_module }}</span>
+                  <span v-else class="sub-module-empty">-</span>
+                </template>
+              </el-table-column>
               <el-table-column prop="case_name" label="用例名称" min-width="200" />
-              <el-table-column prop="description" label="用例描述" min-width="260" />
               <el-table-column label="预期结果" min-width="260">
                 <template #default="{ row }">
                   <span class="expected-text">{{ row.expected_result }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="priority" label="优先级" width="100">
-                <template #default="{ row }">
-                  <el-tag :type="priorityTagType(row.priority)">
-                    {{ priorityLabel(row.priority) }}
-                  </el-tag>
                 </template>
               </el-table-column>
             </el-table>
@@ -455,21 +458,6 @@ const deriveWarnings = (resultData, fallback = []) => {
   return aggregated.length ? aggregated : (fallback ?? [])
 }
 
-const priorityTagType = (priority) => {
-  const value = (priority || '').toLowerCase()
-  if (value === 'high' || value === 'p1') return 'danger'
-  if (value === 'medium' || value === 'p2') return 'warning'
-  if (value === 'low' || value === 'p3') return 'info'
-  return 'default'
-}
-
-const priorityLabel = (priority) => {
-  const value = (priority || '').toUpperCase()
-  if (value === 'HIGH' || value === 'P1') return '高'
-  if (value === 'MEDIUM' || value === 'P2') return '中'
-  if (value === 'LOW' || value === 'P3') return '低'
-  return priority || '未知'
-}
 
 const handleWordFileChange = async (file) => {
   if (!file.raw) {
@@ -497,8 +485,8 @@ const handleWordFileChange = async (file) => {
       // 如果是功能未实现的提示，显示警告而不是错误
       if (response.data.code === -1) {
         ElMessage.warning(response.data.message || 'Word文档上传功能暂未实现，请直接粘贴文档内容')
-      } else {
-        ElMessage.error(response.data.message || '解析Word文档失败')
+    } else {
+      ElMessage.error(response.data.message || '解析Word文档失败')
       }
       wordFileName.value = ''
     }

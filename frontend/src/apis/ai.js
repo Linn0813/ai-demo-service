@@ -72,10 +72,15 @@ export const aiApi = {
     return adaptResponse(response)
   },
 
-  // 上传Word文档并解析（暂未实现后端接口）
+  // 获取飞书OAuth授权URL
+  async getFeishuOAuthUrl() {
+    const response = await aiRequest.get('/api/v1/feishu/oauth/authorize')
+    return adaptResponse(response)
+  },
+
+  // 上传Word文档并解析
   async uploadWordDocument(file) {
-    // TODO: 等待后端实现 Word 文档上传接口
-    // 临时方案：使用 FormData 上传文件
+    // 使用 FormData 上传文件
     const formData = new FormData()
     formData.append('file', file)
     
@@ -99,5 +104,35 @@ export const aiApi = {
       }
       throw error
     }
+  },
+
+  // 知识库相关API
+  // 同步知识库文档
+  async syncDocuments(spaceId = null) {
+    const response = await aiRequest.post('/api/v1/knowledge-base/sync', {
+      space_id: spaceId
+    })
+    return adaptResponse(response)
+  },
+
+  // 问答接口
+  async askQuestion(question, spaceId = null) {
+    const response = await aiRequest.post('/api/v1/knowledge-base/ask', {
+      question,
+      space_id: spaceId
+    })
+    return adaptResponse(response)
+  },
+
+  // 获取集合信息
+  async getCollectionInfo() {
+    const response = await aiRequest.get('/api/v1/knowledge-base/info')
+    return adaptResponse(response)
+  },
+
+  // 获取知识库空间列表
+  async getWikiSpaces() {
+    const response = await aiRequest.get('/api/v1/knowledge-base/spaces')
+    return adaptResponse(response)
   }
 }

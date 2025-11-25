@@ -45,7 +45,8 @@ def run_static_validation(
     """对生成的测试用例进行静态校验，返回告警列表。"""
 
     warnings: List[str] = []
-    required_fields = {"case_name", "description", "preconditions", "steps", "expected_result", "priority"}
+    required_fields = {"module_name", "case_name", "preconditions", "steps", "expected_result"}
+    optional_fields = {"sub_module"}  # 可选字段
     traditional_punctuation = set("「」『』﹁﹂﹃﹄﹙﹚﹛﹜﹝﹞﹃﹫﹬﹭«»")
 
     if not isinstance(test_cases, list):
@@ -61,28 +62,38 @@ def run_static_validation(
         if missing:
             warnings.append(f"[{function_point}] 第{idx}条用例缺少字段: {', '.join(sorted(missing))}")
 
-        for field in required_fields - {"steps"}:
+        # 确保sub_module字段存在（如果不存在，设置为空字符串）
+        if "sub_module" not in case:
+            case["sub_module"] = ""
+
+        for field in required_fields - {"steps", "preconditions"}:
             value = case.get(field)
             if not isinstance(value, str) or not value.strip():
-                if field == "preconditions":
-                    inferred_preconditions = infer_preconditions_from_steps(case.get("steps", []))
-                    case["preconditions"] = inferred_preconditions
-                    warnings.append(f"[{function_point}] 第{idx}条用例字段'{field}'已自动修复")
-                else:
-                    warnings.append(f"[{function_point}] 第{idx}条用例字段'{field}'为空或类型错误")
+                warnings.append(f"[{function_point}] 第{idx}条用例字段'{field}'为空或类型错误")
+        
+        # 处理preconditions字段（可以为空字符串）
+        preconditions = case.get("preconditions")
+        if preconditions is None:
+            # 如果preconditions不存在，尝试从steps推断
+            inferred_preconditions = infer_preconditions_from_steps(case.get("steps", []))
+            case["preconditions"] = inferred_preconditions
+            warnings.append(f"[{function_point}] 第{idx}条用例字段'preconditions'已自动修复")
+        elif not isinstance(preconditions, str):
+            case["preconditions"] = ""
+            warnings.append(f"[{function_point}] 第{idx}条用例字段'preconditions'已自动修复为空字符串")
 
         steps = case.get("steps")
         if not isinstance(steps, list) or not steps or not all(isinstance(step, str) and step.strip() for step in steps):
             warnings.append(f"[{function_point}] 第{idx}条用例步骤列表为空或格式错误")
 
         combined_text = "".join([
+            str(case.get("module_name", "")),
             str(case.get("case_name", "")),
-            case.get("description", ""),
             case.get("expected_result", ""),
             "".join(steps or []),
         ])
         if any(char in traditional_punctuation for char in combined_text):
-            for field in ["case_name", "description", "expected_result"]:
+            for field in ["module_name", "case_name", "expected_result"]:
                 if field in case and isinstance(case[field], str):
                     case[field] = fix_traditional_punctuation(case[field])
             if steps and isinstance(steps, list):
@@ -143,6 +154,144 @@ def run_static_validation(
     return warnings
 
 
+def _detect_generic_expected_result(expected: str) -> bool:
+    """
+    检测是否为通用预期结果（通用化检测，不包含特定需求）。
+    
+    Args:
+        expected: 预期结果文本
+        
+    Returns:
+        如果是通用预期结果，返回True；否则返回False
+    """
+    expected_normalized = expected.strip().lower()
+    
+    # 检查是否匹配通用模式
+    for pattern in RepairConfig.GENERIC_EXPECTED_PATTERNS:
+        if pattern in expected_normalized:
+            return True
+    
+    # 检查是否为过于简短的描述（可能是通用结果）
+    if len(expected_normalized) <= 8 and any(kw in expected_normalized for kw in ['正确', '正常', '成功', '通过', '符合']):
+        return True
+    
+    return False
+
+
+def _find_best_match_from_doc(
+    expected: str,
+    doc_snippet: str,
+    normalize_text: Callable[[str], str],
+    case_name: str = "",
+    steps: List[str] = None,
+) -> Optional[str]:
+    """
+    从需求文档中查找最佳匹配的预期结果（通用化算法）。
+    
+    Args:
+        expected: 当前预期结果
+        doc_snippet: 需求文档片段
+        normalize_text: 文本标准化函数
+        case_name: 用例名称（用于提取关键词）
+        steps: 测试步骤（用于提取关键词）
+        
+    Returns:
+        找到的最佳匹配文本，如果未找到则返回None
+    """
+    if not doc_snippet or not expected:
+        return None
+    
+    normalized_snippet = doc_snippet.replace("\n", "")
+    snippet_lines = [line.strip() for line in doc_snippet.splitlines() if line.strip()]
+
+    snippet_sentences: List[str] = []
+    for line in snippet_lines:
+        parts = [part.strip() for part in RE_SENTENCE_SPLIT.split(line) if part.strip()]
+        snippet_sentences.extend(parts if parts else [line])
+
+    seen = set()
+    unique_candidates: List[str] = []
+    for candidate in snippet_lines + snippet_sentences:
+        if (
+            len(candidate) >= RepairConfig.MIN_SENTENCE_LENGTH
+            and candidate not in seen
+            and not RE_TITLE_LINE.match(candidate)
+            and len(RE_EXTRACT_KEYWORDS.sub('', candidate)) >= RepairConfig.MIN_VALID_CHARS
+        ):
+            seen.add(candidate)
+            unique_candidates.append(candidate)
+    
+    if not unique_candidates:
+        return None
+    
+    expected_normalized = normalize_text(expected.replace("\n", " "))
+    snippet_normalized = normalize_text(normalized_snippet)
+    
+    # 提取关键词（从预期结果、用例名称、测试步骤中提取）
+    all_keywords = []
+    if expected:
+        all_keywords.extend([kw for kw in RE_EXTRACT_KEYWORDS.split(expected) if len(kw) >= 2])
+    if case_name:
+        all_keywords.extend([kw for kw in RE_EXTRACT_KEYWORDS.split(case_name) if len(kw) >= 2])
+    if steps:
+        for step in steps:
+            all_keywords.extend([kw for kw in RE_EXTRACT_KEYWORDS.split(step) if len(kw) >= 2])
+    
+    # 去重并保留核心关键词
+    unique_keywords = list(dict.fromkeys(all_keywords))[:10]  # 保留前10个关键词
+    
+    best_match = None
+    best_score = 0.0
+    
+    for candidate in unique_candidates:
+        candidate_normalized = normalize_text(candidate)
+        
+        # 计算相似度
+        ratio = difflib.SequenceMatcher(None, expected_normalized, candidate_normalized).ratio()
+        
+        # 关键词匹配加分
+        keyword_bonus = 0.0
+        if unique_keywords:
+            matched_keywords = sum(1 for kw in unique_keywords if kw in candidate_normalized)
+            keyword_bonus = (matched_keywords / len(unique_keywords)) * RepairConfig.KEYWORD_BONUS
+        
+        # 核心关键词匹配加分
+        core_keyword_bonus = 0.0
+        if unique_keywords and len(unique_keywords) >= 2:
+            core_keywords = unique_keywords[:3]
+            matched_core = sum(1 for kw in core_keywords if kw in candidate_normalized)
+            if matched_core >= 2:
+                core_keyword_bonus = RepairConfig.CORE_KEYWORD_BONUS
+        
+        # 长度相似度加分
+        length_ratio = min(len(candidate), len(expected)) / max(len(candidate), len(expected)) if max(len(candidate), len(expected)) > 0 else 0
+        length_bonus = length_ratio * 0.05
+        
+        # 最终得分
+        final_score = ratio + keyword_bonus + length_bonus + core_keyword_bonus
+        
+        if final_score > best_score:
+            best_score = final_score
+            best_match = candidate
+    
+    # 如果得分达到阈值，返回最佳匹配
+    if best_match and best_score >= RepairConfig.SIMILARITY_THRESHOLD:
+        return best_match
+    
+    # 如果相似度不够，尝试基于关键词的部分匹配
+    if unique_keywords:
+        for candidate in unique_candidates:
+            candidate_normalized = normalize_text(candidate)
+            matched_count = sum(1 for kw in unique_keywords if kw in candidate_normalized)
+            if matched_count >= max(2, len(unique_keywords) // 2):
+                core_words = [kw for kw in unique_keywords if len(kw) >= 2]
+                matched_core = sum(1 for word in core_words if word in candidate_normalized)
+                if matched_core >= len(core_words) * 0.5:
+                    return candidate
+    
+    return None
+
+
 def repair_expected_results(
     function_point: str,
     test_cases: List[Dict],
@@ -193,6 +342,8 @@ def repair_expected_results(
 
         expected_normalized = normalize_text(expected.replace("\n", " "))
         snippet_normalized = normalize_text(normalized_snippet)
+        
+        # 检查是否已经在原文中
         if expected_normalized in snippet_normalized:
             continue
 
@@ -203,49 +354,32 @@ def repair_expected_results(
             if expected_normalized in snippet_normalized or expected_normalized.replace(" ", "") in snippet_normalized.replace(" ", ""):
                 continue
 
-        expected_normalized_for_match = normalize_text(expected.replace(" ", ""))
-        matched_line: Optional[str] = None
-
-        expected_keywords = [kw for kw in RE_EXTRACT_KEYWORDS.split(expected) if len(kw) >= 2]
-
-        for candidate in unique_candidates:
-            candidate_normalized = normalize_text(candidate.replace(" ", ""))
-            if expected_normalized_for_match == candidate_normalized:
-                matched_line = candidate
-                break
-
-        if not matched_line:
-            best_ratio = 0.0
-            best_candidate = None
-
-            for candidate in unique_candidates:
-                candidate_normalized = normalize_text(candidate)
-                ratio = difflib.SequenceMatcher(None, expected_normalized, candidate_normalized).ratio()
-
-                keyword_bonus = 0.0
-                if expected_keywords:
-                    matched_keywords = sum(1 for kw in expected_keywords if kw in candidate_normalized)
-                    keyword_bonus = (matched_keywords / len(expected_keywords)) * RepairConfig.KEYWORD_BONUS
-
-                length_ratio = min(len(candidate), len(expected)) / max(len(candidate), len(expected)) if max(len(candidate), len(expected)) > 0 else 0
-                length_bonus = length_ratio * 0.05
-
-                core_keyword_bonus = 0.0
-                if expected_keywords and len(expected_keywords) >= 2:
-                    core_keywords = expected_keywords[:3]
-                    matched_core = sum(1 for kw in core_keywords if kw in candidate_normalized)
-                    if matched_core >= 2:
-                        core_keyword_bonus = RepairConfig.CORE_KEYWORD_BONUS
-
-                final_ratio = ratio + keyword_bonus + length_bonus + core_keyword_bonus
-
-                if final_ratio > best_ratio:
-                    best_ratio = final_ratio
-                    best_candidate = candidate
-
-            if best_candidate and best_ratio >= RepairConfig.SIMILARITY_THRESHOLD:
-                matched_line = best_candidate
-
+        # 检测是否为通用预期结果
+        is_generic = _detect_generic_expected_result(expected)
+        
+        # 提取用例信息用于匹配
+        case_name = case.get("case_name", "")
+        steps = case.get("steps", [])
+        
+        # 使用改进的匹配算法查找最佳匹配
+        matched_line = _find_best_match_from_doc(
+            expected, doc_snippet, normalize_text, case_name, steps
+        )
+        
+        # 如果是通用预期结果，强制要求找到匹配
+        if is_generic and not matched_line:
+            # 尝试基于用例名称和步骤查找匹配
+            if case_name or steps:
+                # 使用用例名称和步骤中的关键词重新查找
+                matched_line = _find_best_match_from_doc(
+                    case_name + " " + " ".join(steps) if steps else case_name,
+                    doc_snippet,
+                    normalize_text,
+                    case_name,
+                    steps
+                )
+        
+        # 如果找到匹配，替换预期结果
         if matched_line and matched_line != expected:
             already_logged = any(
                 f"第{idx}条" in log_text and ("已自动替换" in log_text or "已修复格式" in log_text)
@@ -254,31 +388,17 @@ def repair_expected_results(
             if not already_logged:
                 case["expected_result"] = matched_line
                 display_text = matched_line if len(matched_line) <= 100 else matched_line[:97] + "..."
-                repair_logs.append(f"[{function_point}] 第{idx}条预期结果已自动替换为原文: {display_text}")
+                if is_generic:
+                    repair_logs.append(f"[{function_point}] 第{idx}条通用预期结果已自动替换为原文: {display_text}")
+                else:
+                    repair_logs.append(f"[{function_point}] 第{idx}条预期结果已自动替换为原文: {display_text}")
             continue
-
-        if not matched_line and expected_keywords:
-            for candidate in unique_candidates:
-                candidate_normalized = normalize_text(candidate)
-                matched_count = sum(1 for kw in expected_keywords if kw in candidate_normalized)
-                if matched_count >= max(2, len(expected_keywords) // 2):
-                    core_words = [kw for kw in expected_keywords if len(kw) >= 2]
-                    matched_core = sum(1 for word in core_words if word in candidate_normalized)
-                    if matched_core >= len(core_words) * 0.5:
-                        matched_line = candidate
-                        break
-
-            if matched_line and matched_line != expected:
-                already_logged = any(
-                    f"第{idx}条" in log_text and ("已自动替换" in log_text or "已修复格式" in log_text)
-                    for log_text in repair_logs
-                )
-                if not already_logged:
-                    case["expected_result"] = matched_line
-                    display_text = matched_line if len(matched_line) <= 100 else matched_line[:97] + "..."
-                    repair_logs.append(
-                        f"[{function_point}] 第{idx}条预期结果已自动替换为原文（部分匹配）: {display_text}"
-                    )
+        
+        # 如果未找到匹配且是通用预期结果，记录警告
+        if is_generic and not matched_line:
+            repair_logs.append(
+                f"[{function_point}] 第{idx}条用例使用了通用预期结果但未在原文中找到匹配，需人工确认"
+            )
 
     return repair_logs
 

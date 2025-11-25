@@ -2,7 +2,7 @@
 """Pydantic 请求 / 响应模型。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -35,7 +35,7 @@ class FunctionModule(BaseModel):
     description: Optional[str] = None
     matched_content: Optional[str] = None
     matched_positions: Optional[List[int]] = None
-    match_confidence: Optional[float] = None
+    match_confidence: Optional[Literal["low", "medium", "high"]] = Field(None, description="匹配置信度：low/medium/high")
 
 
 class GenerateTestCasesResponse(BaseModel):
@@ -57,7 +57,58 @@ class RematchModuleRequest(RequirementDocPayload):
 class RematchModuleResponse(BaseModel):
     matched_content: str
     matched_positions: List[int]
-    match_confidence: float
+    match_confidence: Literal["low", "medium", "high"]
+
+
+# ==================== 知识库相关Schema ====================
+
+class SyncDocumentsRequest(BaseModel):
+    space_id: Optional[str] = Field(None, description="知识库空间ID，如果不提供则同步所有空间")
+
+
+class SyncDocumentsResponse(BaseModel):
+    success: bool
+    message: str = ""
+    document_count: int = 0
+    indexed_count: int = 0
+    total_spaces: Optional[int] = None
+    success_count: Optional[int] = None
+    failed_count: Optional[int] = None
+    failed_spaces: Optional[List[Dict[str, Any]]] = None
+
+
+class AskQuestionRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="用户问题")
+    space_id: Optional[str] = Field(None, description="指定搜索的知识库空间ID，如果不提供则搜索所有空间")
+
+
+class SourceInfo(BaseModel):
+    title: str
+    url: str
+    similarity: float = Field(..., ge=0, le=1, description="相似度分数")
+
+
+class AskQuestionResponse(BaseModel):
+    success: bool
+    answer: str
+    sources: List[SourceInfo] = Field(default_factory=list)
+
+
+class CollectionInfoResponse(BaseModel):
+    success: bool
+    info: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WikiSpaceInfo(BaseModel):
+    space_id: str
+    name: str
+    description: Optional[str] = None
+
+
+class WikiSpacesResponse(BaseModel):
+    success: bool
+    spaces: List[WikiSpaceInfo] = Field(default_factory=list)
+    message: Optional[str] = None
 
 
 class ModelInfo(BaseModel):
@@ -73,3 +124,11 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
     name: str
+
+
+class WordUploadResponse(BaseModel):
+    """Word 文档上传解析响应。"""
+    text: str = Field(..., description="提取的文本内容")
+    total_paragraphs: int = Field(..., description="段落总数")
+    total_headings: int = Field(..., description="标题数量")
+    structure: Optional[Dict[str, Any]] = Field(None, description="文档结构信息（包含标题列表）")

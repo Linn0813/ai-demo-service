@@ -38,6 +38,12 @@ LLM_CONFIG = {
 
 # Embedding 配置（知识库使用）
 EMBEDDING_CONFIG = {
+    # 使用方式：ollama 或 sentence-transformers
+    "provider": "ollama",  # ollama: 使用本地Ollama服务, sentence-transformers: 使用HuggingFace模型
+    # Ollama配置（当provider为ollama时使用）
+    "ollama_base_url": "http://localhost:11434",  # Ollama服务地址
+    "ollama_model": "qwen2.5:7b",  # Ollama embedding模型名称（可以使用LLM模型，Ollama会自动处理）
+    # sentence-transformers配置（当provider为sentence-transformers时使用）
     "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     "device": "cpu",  # cpu, cuda
     "batch_size": 32,
@@ -54,9 +60,9 @@ class RepairConfig:
     FORMAT_FIX_KEYWORD_COUNT = 3
 
     # 相似度匹配阈值（降低阈值以提高匹配率）
-    SIMILARITY_THRESHOLD = 0.55  # 进一步降低阈值，提高匹配率
-    KEYWORD_BONUS = 0.2  # 增加关键词匹配的权重
-    CORE_KEYWORD_BONUS = 0.15  # 核心关键词匹配的额外权重
+    SIMILARITY_THRESHOLD = 0.50  # 进一步降低阈值，提高匹配率
+    KEYWORD_BONUS = 0.25  # 增加关键词匹配的权重
+    CORE_KEYWORD_BONUS = 0.20  # 核心关键词匹配的额外权重
 
     # 候选句子过滤
     MIN_SENTENCE_LENGTH = 10
@@ -68,6 +74,22 @@ class RepairConfig:
 
     # preconditions修复
     PRECONDITIONS_DEFAULT = "满足测试前置条件"
+
+    # 通用预期结果检测（通用化，不包含特定需求）
+    GENERIC_EXPECTED_PATTERNS = [
+        "点击关闭直接消失",
+        "正确显示",
+        "正常显示",
+        "验证通过",
+        "符合预期",
+        "满足要求",
+        "操作成功",
+        "显示正确",
+        "功能正常",
+    ]
+    
+    # 通用预期结果的最小相似度阈值（用于检测）
+    GENERIC_DETECTION_THRESHOLD = 0.8
 
 
 class ExtractionConfig:
@@ -125,6 +147,17 @@ class ExtractionConfig:
     MODULE_POSITION_TOLERANCE = 5  # 模块位置容差（行数），用于去重判断
     SHORT_MODULE_NAME_LENGTH = 6  # 短模块名称长度阈值
     MODULE_TITLE_REMAINING_LENGTH = 3  # 模块标题剩余部分长度阈值
+    
+    # 子模块识别关键词（通用化，不包含特定业务逻辑）
+    # 这些关键词用于识别UI组件、设置项、规则定义等常见的子功能模块
+    SUB_MODULE_KEYWORDS = [
+        "弹窗", "半弹窗", "对话框", "设置", "配置", 
+        "规则", "定义", "算法", "说明", "解释", 
+        "详情", "信息", "卡片", "列表", "表单"
+    ]
+    
+    # 短模块名称的子模块关键词（用于短名称模块的快速识别）
+    SHORT_SUB_MODULE_KEYWORDS = ["弹窗", "设置", "规则", "定义", "解释", "详情"]
 
     # 文档元信息识别配置（用于排除文档末尾的元信息部分）
     METADATA_SECTION_KEYWORDS = [

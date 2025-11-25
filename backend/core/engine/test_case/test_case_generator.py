@@ -127,8 +127,9 @@ class TestCaseGenerator:
 
     # === 生成单个模块的测试用例 ===
     @staticmethod
-    def _build_single_point_prompt(function_point: str, doc_snippet: str) -> str:
-        return f"""你是一位测试工程师。请根据需求文档为功能点"{function_point}"生成测试用例。
+    def _build_single_point_prompt(function_point: str, doc_snippet: str, original_module_name: Optional[str] = None) -> str:
+        module_name_to_use = original_module_name or function_point
+        return f"""你是一位有着10年测试经验的资深测试工程师，精通ISTQB测试标准和移动端测试最佳实践。请根据需求文档为功能点"{function_point}"生成全面的测试用例。
 
 **重要：只输出JSON格式，不要任何其他文字！**
 
@@ -138,40 +139,115 @@ class TestCaseGenerator:
 【功能点】
 {function_point}
 
-【要求】
+【生成要求 - 全面覆盖】
+必须为功能点"{function_point}"生成足够全面的测试用例，确保覆盖以下维度：
+
+1. **UI元素测试（必须覆盖）**
+   - 所有按钮、字段、标题、文案、图表
+   - 所有显示元素、交互元素
+   - 确保每个UI元素都有至少1个测试用例
+
+2. **业务规则测试（必须覆盖）**
+   - 所有判断条件（如果...则...）
+   - 所有计算规则、显示规则
+   - 所有状态转换
+   - 确保每个业务规则都有至少1个测试用例
+
+3. **边界条件测试（必须覆盖）**
+   - 数值边界：最少、最多、临界值
+   - 时间边界：边界时间点、时间范围
+   - 数据量边界：数据不足、数据充足、临界数据量
+   - 确保每个边界条件都有至少1个测试用例
+
+4. **交互逻辑测试（必须覆盖）**
+   - 所有用户操作（点击、输入、选择、滑动）
+   - 所有流程跳转、状态变化
+   - 确保每个交互逻辑都有至少1个测试用例
+
+【测试设计方法应用】
+在生成测试用例时，必须应用以下测试设计方法：
+
+1. **等价类划分**
+   - 有效等价类：存在有效数据、有数据、满足条件
+   - 无效等价类：无有效数据、无数据、不满足条件
+   - 为每个等价类生成至少1个测试用例
+
+2. **边界值分析**
+   - 必须测试所有边界值：最少、最多、临界值
+   - 必须测试边界值两侧：边界值-1、边界值、边界值+1
+   - 为每个边界值生成至少1个测试用例
+
+3. **场景法**
+   - 正常场景：完整操作流程
+   - 异常场景：错误操作、异常数据
+   - 为每个场景生成完整的测试用例
+
+【预期结果要求 - 严格规定】
+**⚠️ 这是最重要的要求，必须严格遵守：**
+
+1. **必须从需求文档中逐字提取预期结果**
+   - expected_result字段必须逐字复制需求文档中的原句
+   - 不能改写、总结、意译或概括
+   - 不能使用通用预期结果（如"点击关闭直接消失"、"正确显示"、"正常显示"等）
+
+2. **预期结果提取方法**
+   - **步骤1**：仔细阅读需求文档中关于该功能点的所有描述
+   - **步骤2**：查找包含该功能点关键词的句子（如按钮名称、字段名称、操作描述等）
+   - **步骤3**：找到描述该功能预期行为或结果的完整句子
+   - **步骤4**：逐字复制该句子作为expected_result，不要修改任何文字
+
+3. **预期结果必须具体、可验证**
+   - 如果需求文档中有明确的预期结果描述，必须逐字复制
+   - 如果需求文档中写"点击X按钮后Y发生"，expected_result必须写"点击X按钮后Y发生"（不能改写成"点击X按钮后Y正确发生"）
+   - 如果需求文档中写"显示为A值"，expected_result必须写"显示为A值"（不能改写成"A值正确显示"）
+
+4. **预期结果必须包含需求文档中的关键词**
+   - 按钮名称、字段名称、标题文字必须与需求文档一致
+   - 数值、时间、状态描述必须与需求文档一致
+   - 操作描述、流程步骤必须与需求文档一致
+
+5. **禁止使用通用预期结果**
+   - 禁止使用"点击关闭直接消失"等通用描述
+   - 禁止使用"正确显示"、"正常显示"、"验证通过"等模糊描述
+   - 禁止使用"符合预期"、"满足要求"等抽象描述
+   - 必须使用需求文档中的具体描述
+
+6. **找不到原文时的处理**
+   - 如果需求文档中没有明确的预期结果描述，尝试查找相关的功能描述、规则说明、状态定义等
+   - 如果仍然找不到，可以基于功能点的描述进行合理推断，但必须标注为推断结果
+   - 优先查找包含功能点名称、操作动词、状态描述的句子
+
+【其他要求】
 1. 只生成与"{function_point}"相关的测试用例
 2. 必须严格按照需求文档中的内容生成，不能编造
-3. **测试用例中的expected_result字段必须逐字引用需求文档中的原句，不能改写、总结或意译**
-4. 不能添加需求文档中没有的功能、按钮、操作
-5. **输出必须全部使用简体中文，禁止出现繁体字或「」等繁体标点**
-6. **用例中涉及的页面/模块名称必须与需求文档保持一致，不得自行更换页面位置**
-7. **所有测试步骤必须是App端可执行的实际操作，禁止出现"登录后台""查看数据库""手动投放"等后台或运营动作**
-8. **避免写入无法执行的描述（例如"等待7天"），遇到时改写为可执行的验证步骤或拆分为前置条件**
-
-【生成规则】
-- 仔细阅读需求文档中关于"{function_point}"的所有描述
-- 为每个UI元素、交互逻辑、业务规则、限制条件生成测试用例
-- **expected_result必须从需求文档中直接复制完整的句子，不能修改任何文字**
-- 如果需求文档写"点击关闭直接消失"，expected_result必须写"点击关闭直接消失"（不能写成"点击关闭按钮后弹窗消失"）
-- 直接引用需求文档中的按钮名称、字段名称、标题文字
-- **每个测试用例的steps必须至少包含2-3条明确的操作步骤，每一步都要描述具体的用户操作**
-- **步骤要详细具体，例如："1. 打开App，进入觉知页"、"2. 查看Banner是否显示"、"3. 点击【去评分】按钮"**
-- **不要将多个操作合并为一个步骤，每个步骤只描述一个操作**
-- 输出结构化且详尽，确保覆盖正常流程、边界场景与约束条件
+3. 不能添加需求文档中没有的功能、按钮、操作
+4. **输出必须全部使用简体中文，禁止出现繁体字或「」等繁体标点**
+5. **用例中涉及的页面/模块名称必须与需求文档保持一致，不得自行更换页面位置**
+6. **所有测试步骤必须是App端可执行的实际操作，禁止出现"登录后台""查看数据库""手动投放"等后台或运营动作**
+7. **避免写入无法执行的描述（例如"等待7天"），遇到时改写为可执行的验证步骤或拆分为前置条件**
+8. **每个测试用例的steps必须至少包含3条明确的操作步骤，每一步都要描述具体的用户操作**
+9. **步骤要详细具体，例如："1. 打开App，进入觉知页"、"2. 查看Banner是否显示"、"3. 点击【去评分】按钮"**
+10. **不要将多个操作合并为一个步骤，每个步骤只描述一个操作**
 
 【输出格式】
 {{
   "test_cases": [
     {{
+      "module_name": "{module_name_to_use}",
+      "sub_module": "子功能点名称（可选，如果用例属于某个子功能点，填写子功能点名称；如果没有子功能点，可以为空字符串或null）",
       "case_name": "用例名称",
-      "description": "用例描述",
-      "preconditions": "前置条件",
+      "preconditions": "前置条件（如果没有前置条件，可以为空字符串）",
       "steps": ["步骤1：具体操作", "步骤2：具体操作", "步骤3：验证结果"],
-      "expected_result": "预期结果（必须逐字复制需求文档中的原句，不能改写）",
-      "priority": "high"
+      "expected_result": "预期结果（必须逐字复制需求文档中的原句，不能改写）"
     }}
   ]
 }}
+
+**重要说明：**
+- module_name 必须填写为功能模块名称（即：{module_name_to_use}）
+- sub_module 是可选的，只有当用例明确属于某个子功能点时才填写
+- 如果功能模块没有子功能点，sub_module 可以为空字符串或null
+- **expected_result 必须逐字复制需求文档中的原句，不能改写、总结或意译**
 
 **再次强调：只输出JSON，不要任何其他文字！**"""
 
@@ -180,6 +256,7 @@ class TestCaseGenerator:
         requirement_doc: str,
         function_point: str,
         fp_data: Optional[Dict] = None,
+        original_module_name: Optional[str] = None,
     ) -> Tuple[List[Dict], List[str], str]:
         """
         为单个功能点生成测试用例
@@ -197,7 +274,7 @@ class TestCaseGenerator:
         else:
             doc_snippet = self.extractor.extract_relevant_section(requirement_doc, function_point, fp_data)
 
-        prompt = self._build_single_point_prompt(function_point, doc_snippet)
+        prompt = self._build_single_point_prompt(function_point, doc_snippet, original_module_name)
 
         try:
             # 打印发送给模型的完整Prompt（用于调试）
@@ -237,11 +314,68 @@ class TestCaseGenerator:
             # 使用统一的JSON解析函数，增强容错能力
             try:
                 result = json.loads(response_text)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # 如果标准解析失败，尝试使用容错解析
-                log.debug(f"标准JSON解析失败，尝试容错解析...")
-                result = _parse_json_with_fallback(response_text)
+                log.debug(f"标准JSON解析失败，尝试容错解析... (错误: {e.msg}, 位置: {e.pos})")
+                try:
+                    result = _parse_json_with_fallback(response_text)
+                except Exception as fallback_error:
+                    log.warning(f"容错解析也失败: {fallback_error}")
+                    # 尝试提取部分JSON（只提取test_cases数组）
+                    test_cases_match = re.search(r'"test_cases"\s*:\s*\[(.*?)\]', response_text, re.DOTALL)
+                    if test_cases_match:
+                        try:
+                            # 尝试解析单个用例
+                            case_matches = re.findall(r'\{[^{}]*\}', test_cases_match.group(1))
+                            test_cases = []
+                            for case_match in case_matches:
+                                try:
+                                    case = json.loads(case_match)
+                                    test_cases.append(case)
+                                except json.JSONDecodeError:
+                                    # 尝试容错解析单个用例
+                                    try:
+                                        case = _parse_json_with_fallback(case_match)
+                                        test_cases.append(case)
+                                    except Exception:
+                                        pass
+                            result = {"test_cases": test_cases}
+                            log.info(f"从部分JSON中提取到 {len(test_cases)} 个用例")
+                        except Exception:
+                            raise fallback_error
+                    else:
+                        raise fallback_error
             test_cases = result.get("test_cases", [])
+            # 确保每个测试用例都有module_name字段，使用原始模块名称
+            module_name_to_use = original_module_name or function_point
+            # 判断function_point是否是子功能点（与原始模块名称不同）
+            is_sub_function = function_point != module_name_to_use
+            
+            for case in test_cases:
+                if isinstance(case, dict):
+                    # 保存AI可能填写的module_name（可能是子功能点名称）
+                    ai_module_name = case.get("module_name", "")
+                    
+                    # 统一使用原始模块名称
+                    case["module_name"] = module_name_to_use
+                    
+                    # 处理sub_module字段
+                    ai_sub_module = case.get("sub_module", "")
+                    
+                    # 如果AI在module_name中填写了子功能点名称（与原始模块不同），将其移到sub_module
+                    if ai_module_name and ai_module_name != module_name_to_use:
+                        # AI将子功能点名称写在了module_name中
+                        if not ai_sub_module:
+                            case["sub_module"] = ai_module_name
+                    elif is_sub_function:
+                        # function_point本身就是子功能点名称
+                        if not ai_sub_module:
+                            case["sub_module"] = function_point
+                    else:
+                        # 确保sub_module字段存在（即使为空）
+                        if "sub_module" not in case:
+                            case["sub_module"] = ""
+            
             # 先进行静态校验（包括格式修复）
             warnings = run_static_validation(
                 function_point,
@@ -308,15 +442,15 @@ class TestCaseGenerator:
                                 warnings.append(f"[{function_point}] 第{idx}条用例步骤已自动拆分")
                                 break
 
-                # 如果仍然不足2步，尝试从描述或预期结果中提取步骤
+                # 如果仍然不足2步，尝试从用例名称或预期结果中提取步骤
                 if len(normalized_steps) < 2:
-                    description = case.get("description", "")
+                    case_name = case.get("case_name", "")
                     expected_result = case.get("expected_result", "")
 
-                    # 从描述中提取可能的步骤
-                    if description:
-                        desc_parts = [p.strip() for p in re.split(r"[，,。.；;]", description) if len(p.strip()) > 5]
-                        if desc_parts and len(normalized_steps) == 1:
+                    # 从用例名称中提取可能的步骤
+                    if case_name:
+                        name_parts = [p.strip() for p in re.split(r"[，,。.；;]", case_name) if len(p.strip()) > 5]
+                        if name_parts and len(normalized_steps) == 1:
                             # 如果只有一个步骤，尝试添加一个验证步骤
                             normalized_steps.append(f"验证{expected_result[:20] if expected_result else '结果'}")
                             warnings.append(f"[{function_point}] 第{idx}条用例已自动补全验证步骤")
@@ -415,7 +549,7 @@ class TestCaseGenerator:
 
                         try:
                             test_cases, warnings, _ = self.generate_test_cases_for_point(
-                                requirement_doc, fp_name, fp_data_for_generation
+                                requirement_doc, fp_name, fp_data_for_generation, original_module_name=module_name
                             )
                             all_test_cases.extend(test_cases)
                             all_warnings.extend(warnings)
@@ -429,13 +563,13 @@ class TestCaseGenerator:
                     # 功能点数量不足，回退到直接生成
                     log.info(f"[{idx}/{total}] 模块 '{module_name}' 功能点数量不足 ({len(function_points)} < {ExtractionConfig.MIN_FUNCTION_POINTS_FOR_EXTRACTION})，回退到直接生成")
                     all_test_cases, all_warnings, _ = self.generate_test_cases_for_point(
-                        requirement_doc, module_name, fp_data
+                        requirement_doc, module_name, fp_data, original_module_name=module_name
                     )
             else:
                 # 简单模块：直接生成测试用例
                 log.debug(f"[{idx}/{total}] 模块 '{module_name}' 被识别为简单模块，直接生成测试用例")
                 all_test_cases, all_warnings, _ = self.generate_test_cases_for_point(
-                    requirement_doc, module_name, fp_data
+                    requirement_doc, module_name, fp_data, original_module_name=module_name
                 )
 
             if all_test_cases:
