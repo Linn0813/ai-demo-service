@@ -80,6 +80,7 @@ class SyncDocumentsResponse(BaseModel):
 class AskQuestionRequest(BaseModel):
     question: str = Field(..., min_length=1, description="用户问题")
     space_id: Optional[str] = Field(None, description="指定搜索的知识库空间ID，如果不提供则搜索所有空间")
+    use_web_search: bool = Field(False, description="是否启用网络搜索（默认False）。当知识库结果不理想时，会使用网络搜索补充")
 
 
 class SourceInfo(BaseModel):
@@ -92,6 +93,9 @@ class AskQuestionResponse(BaseModel):
     success: bool
     answer: str
     sources: List[SourceInfo] = Field(default_factory=list)
+    has_web_search: Optional[bool] = Field(None, description="是否使用了网络搜索")
+    suggest_web_search: Optional[bool] = Field(None, description="是否建议使用网络搜索（当知识库结果不理想时）")
+    max_similarity: Optional[float] = Field(None, description="最高相似度（用于判断是否需要网络搜索）")
 
 
 class CollectionInfoResponse(BaseModel):

@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from pathlib import Path
+from datetime import datetime
+import json
 
 from core.engine.knowledge_base import (
     FeishuDocumentLoader,
@@ -21,6 +24,11 @@ class KnowledgeBaseService:
         """初始化知识库服务。"""
         self.document_loader = FeishuDocumentLoader()
         self._rag_engine = None
+        self._web_search_service = None
+        # 创建结果保存目录
+        project_root = Path(__file__).parent.parent.parent
+        self.results_dir = project_root / 'data' / 'query_results'
+        self.results_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def rag_engine(self) -> RAGEngine:
@@ -160,7 +168,19 @@ class KnowledgeBaseService:
                 "total_documents": 0,
             }
 
-    def ask(self, question: str, use_realtime_search: bool = True, space_id: Optional[str] = None) -> Dict[str, Any]:
+    @property
+    def web_search_service(self):
+        """获取网络搜索服务（延迟初始化）"""
+        if self._web_search_service is None:
+            try:
+                from core.engine.base.web_search_service import WebSearchService
+                self._web_search_service = WebSearchService()
+            except Exception as e:
+                log.warning(f"网络搜索服务不可用: {e}")
+                self._web_search_service = None
+        return self._web_search_service
+
+    def ask(self, question: str, use_realtime_search: bool = True, space_id: Optional[str] = None, use_web_search: bool = False) -> Dict[str, Any]:
         """
         回答问题。
         
@@ -172,6 +192,7 @@ class KnowledgeBaseService:
             question: 用户问题
             use_realtime_search: 是否使用实时搜索模式（默认True）
             space_id: 指定搜索的知识库空间ID，如果不提供则搜索所有空间
+            use_web_search: 是否启用网络搜索（默认False）。当知识库结果不理想时，会使用网络搜索补充
 
         Returns:
             答案和引用来源
@@ -190,7 +211,29 @@ class KnowledgeBaseService:
                 use_realtime_search = True
             
             if use_realtime_search:
-                return self._ask_with_realtime_search(question, space_id=space_id)
+                kb_result = self._ask_with_realtime_search(question, space_id=space_id)
+                
+                # 计算最高相似度，用于判断是否需要网络搜索
+                sources = kb_result.get("sources", [])
+                max_similarity = max([s.get("similarity", 0) for s in sources]) if sources else 0.0
+                
+                # 判断是否建议使用网络搜索
+                suggest_web_search = self._should_use_web_search(question, kb_result)
+                
+                # 如果启用了网络搜索，且知识库结果不理想，尝试网络搜索
+                if use_web_search and suggest_web_search:
+                    log.info("🌐 知识库结果不理想，尝试使用网络搜索补充...")
+                    web_result = self._search_web_and_merge(question, kb_result)
+                    return web_result
+                
+                # 如果未启用网络搜索，但建议使用，在结果中添加建议信息
+                if not use_web_search:
+                    kb_result["suggest_web_search"] = suggest_web_search
+                    kb_result["max_similarity"] = max_similarity
+                    if suggest_web_search:
+                        log.info(f"💡 建议使用网络搜索（最高相似度: {max_similarity:.3f}）")
+                
+                return kb_result
             else:
                 # 使用向量搜索模式（暂不支持指定space_id，搜索所有文档）
                 if space_id:
@@ -248,6 +291,41 @@ class KnowledgeBaseService:
                 "message": f"获取知识库空间列表失败: {error_msg}",
             }
     
+    def _save_query_result(self, question: str, step: str, data: Dict[str, Any], query_timestamp: Optional[str] = None):
+        """保存查询结果到文件"""
+        try:
+            # 如果提供了query_timestamp，使用它；否则生成新的
+            if query_timestamp is None:
+                query_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            filename = f"query_{query_timestamp}.json"
+            filepath = self.results_dir / filename
+            
+            # 如果文件已存在，追加数据；否则创建新文件
+            if filepath.exists():
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    result_data = json.load(f)
+            else:
+                result_data = {
+                    "question": question,
+                    "timestamp": query_timestamp,
+                    "steps": {}
+                }
+            
+            result_data["steps"][step] = {
+                "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "data": data
+            }
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(result_data, f, ensure_ascii=False, indent=2)
+            
+            log.info(f"💾 查询结果已保存到: {filepath} (步骤: {step})")
+            return query_timestamp  # 返回时间戳，供后续步骤使用
+        except Exception as e:
+            log.warning(f"保存查询结果失败: {e}")
+            return None
+    
     def _ask_with_realtime_search(self, question: str, space_id: Optional[str] = None) -> Dict[str, Any]:
         """
         使用实时搜索模式回答问题（直接使用飞书API搜索，无需同步文档）。
@@ -269,7 +347,15 @@ class KnowledgeBaseService:
             from core.engine.base.embedding_service import EmbeddingService
             import re
             
-            log.info(f"使用实时搜索模式处理问题: {question}")
+            log.info("="*80)
+            log.info(f"🔍 使用实时搜索模式处理问题: {question}")
+            log.info("="*80)
+            
+            # 生成查询时间戳（所有步骤使用同一个时间戳）
+            query_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # 保存问题
+            self._save_query_result(question, "question", {"question": question, "space_id": space_id}, query_timestamp)
             
             # 获取知识空间列表
             if space_id:
@@ -304,10 +390,17 @@ class KnowledgeBaseService:
             search_queries = search_strategy.get("search_queries", [question])
             related_concepts = search_strategy.get("related_concepts", [])
             
-            log.info(f"AI分析结果:")
+            log.info(f"📊 AI分析结果:")
             log.info(f"  关键词: {keywords}")
             log.info(f"  搜索查询: {search_queries}")
             log.info(f"  相关概念: {related_concepts}")
+            
+            # 保存AI分析结果
+            self._save_query_result(question, "ai_analysis", {
+                "keywords": keywords,
+                "search_queries": search_queries,
+                "related_concepts": related_concepts
+            }, query_timestamp)
             
             # 优化搜索查询：去除疑问词，提取核心关键词
             # 飞书搜索API不支持包含疑问词的完整问题，需要提取关键词
@@ -354,7 +447,13 @@ class KnowledgeBaseService:
                     unique_queries.append(q)
             
             search_queries = unique_queries[:3]  # 最多3个查询
-            log.info(f"优化后的搜索查询（去除疑问词）: {search_queries}")
+            log.info(f"🔍 优化后的搜索查询（去除疑问词）: {search_queries}")
+            
+            # 保存优化后的搜索查询
+            self._save_query_result(question, "search_queries", {
+                "final_queries": search_queries,
+                "original_queries": search_strategy.get("search_queries", [])
+            }, query_timestamp)
             
             # 在所有空间中搜索（使用AI提取的搜索策略）
             all_results = []
@@ -467,7 +566,21 @@ class KnowledgeBaseService:
                     "sources": [],
                 }
             
-            log.info(f"找到 {len(all_results)} 个候选文档，开始加载内容并重排序...")
+            log.info(f"📚 找到 {len(all_results)} 个候选文档，开始加载内容并重排序...")
+            
+            # 保存搜索结果
+            self._save_query_result(question, "search_results", {
+                "total_count": len(all_results),
+                "documents": [
+                    {
+                        "title": r.get("title", "未知"),
+                        "url": r.get("url", ""),
+                        "space_name": r.get("space_name", ""),
+                        "search_query": r.get("search_query", "")
+                    }
+                    for r in all_results[:20]  # 只保存前20个
+                ]
+            }, query_timestamp)
             
             # 加载文档内容并计算相似度
             doc_results = []
@@ -631,9 +744,19 @@ class KnowledgeBaseService:
                     # 提取最相关的文档片段
                     relevant_chunk = self._extract_relevant_chunk(doc_content, question, keywords)
                     
-                    # 计算相似度（使用embedding）- 使用提取的相关片段计算，而不是原始内容
-                    # 注意：这里使用relevant_chunk而不是doc_content，因为relevant_chunk是提取的最相关部分
-                    similarity = self._calculate_similarity(question, relevant_chunk)
+                    # 验证提取的片段是否有效
+                    if not relevant_chunk or not relevant_chunk.strip():
+                        log.warning(f"文档 {title} 提取的相关片段为空，使用原始内容计算相似度")
+                        relevant_chunk = doc_content[:1000] if doc_content else ""  # 使用前1000字符作为回退
+                    
+                    if not relevant_chunk or not relevant_chunk.strip():
+                        log.warning(f"文档 {title} 内容为空，跳过相似度计算")
+                        similarity = 0.0
+                    else:
+                        # 计算相似度（使用embedding）- 使用提取的相关片段计算，而不是原始内容
+                        # 注意：这里使用relevant_chunk而不是doc_content，因为relevant_chunk是提取的最相关部分
+                        similarity = self._calculate_similarity(question, relevant_chunk)
+                        log.debug(f"文档 {title} 相似度: {similarity:.3f} (片段长度: {len(relevant_chunk)})")
                     
                     doc_results.append({
                         "title": title,
@@ -668,17 +791,124 @@ class KnowledgeBaseService:
             results_with_content = [r for r in doc_results if r.get("has_content", True)]
             results_without_content = [r for r in doc_results if not r.get("has_content", True)]
             
-            # 优先使用有内容的文档，相似度阈值0.3
-            filtered_results = [r for r in results_with_content if r["similarity"] >= 0.3]
+            # 优先使用有内容的文档，相似度阈值提高到0.5（更严格的相关性要求）
+            MIN_SIMILARITY_THRESHOLD = 0.5
+            filtered_results = [r for r in results_with_content if r["similarity"] >= MIN_SIMILARITY_THRESHOLD]
             
-            # 如果没有高相似度的有内容文档，至少返回前几个有内容的
+            # 记录相似度信息用于调试
+            if results_with_content:
+                max_sim = max([r["similarity"] for r in results_with_content])
+                avg_sim = sum([r["similarity"] for r in results_with_content]) / len(results_with_content)
+                log.info(f"📊 文档相似度统计: 最高={max_sim:.3f}, 平均={avg_sim:.3f}, 阈值={MIN_SIMILARITY_THRESHOLD}")
+                log.info(f"✅ 达到阈值（>={MIN_SIMILARITY_THRESHOLD}）的文档数: {len(filtered_results)}/{len(results_with_content)}")
+                
+                # 打印前10个文档的相似度
+                log.info(f"📋 文档相似度列表（前10个）:")
+                for i, doc in enumerate(results_with_content[:10], 1):
+                    sim = doc.get("similarity", 0.0)
+                    status = "✅" if sim >= MIN_SIMILARITY_THRESHOLD else "❌"
+                    log.info(f"   {status} {i}. {doc.get('title', '未知')}: {sim:.3f}")
+            
+            # 保存相似度计算结果
+            max_sim = max([r["similarity"] for r in results_with_content]) if results_with_content else 0.0
+            avg_sim = sum([r["similarity"] for r in results_with_content]) / len(results_with_content) if results_with_content else 0.0
+            self._save_query_result(question, "similarity_calculation", {
+                "total_docs": len(doc_results),
+                "with_content": len(results_with_content),
+                "without_content": len(results_without_content),
+                "filtered_count": len(filtered_results),
+                "threshold": MIN_SIMILARITY_THRESHOLD,
+                "max_similarity": max_sim,
+                "avg_similarity": avg_sim,
+                "documents": [
+                    {
+                        "title": r.get("title", "未知"),
+                        "similarity": r.get("similarity", 0.0),
+                        "has_content": r.get("has_content", False),
+                        "url": r.get("url", "")
+                    }
+                    for r in results_with_content[:15]  # 保存前15个
+                ]
+            }, query_timestamp)
+            
+            # 🔴 修复：如果没有达到阈值的文档，明确拒绝，不再强制返回
             if not filtered_results:
-                filtered_results = results_with_content[:3] if results_with_content else []
+                log.warning(f"未找到相似度>={MIN_SIMILARITY_THRESHOLD}的相关文档")
+                if results_with_content:
+                    # 记录最高相似度，帮助用户理解为什么拒绝
+                    max_sim = max([r["similarity"] for r in results_with_content])
+                    top_titles = [r["title"] for r in sorted(results_with_content, key=lambda x: x["similarity"], reverse=True)[:3]]
             
-            # 如果没有有内容的文档，使用无内容的文档（至少标题匹配）
-            if not filtered_results and results_without_content:
-                filtered_results = results_without_content[:5]
-                log.info(f"无法获取文档完整内容，使用文档标题作为来源（{len(filtered_results)}个）")
+                    # 判断是否建议使用网络搜索
+                    suggest_web = self._should_use_web_search(question, {
+                        "success": False,
+                        "sources": [{"similarity": max_sim}]
+                    })
+                    
+                    answer_text = (
+                        f"抱歉，未找到与您的问题高度相关的文档。\n\n"
+                        f"找到的文档最高相似度为 {max_sim:.3f}，低于阈值 {MIN_SIMILARITY_THRESHOLD}。\n\n"
+                        f"找到的相关文档：\n" + "\n".join([f"- {title}" for title in top_titles]) + "\n\n"
+                    )
+                    
+                    if suggest_web:
+                        answer_text += (
+                            f"💡 建议：\n"
+                            f"1. 可以尝试使用网络搜索获取更多信息\n"
+                            f"2. 或者尝试使用不同的关键词重新提问\n"
+                            f"3. 或者检查知识库中是否有相关文档"
+                        )
+                    else:
+                        answer_text += (
+                            f"建议：\n"
+                            f"1. 尝试使用不同的关键词重新提问\n"
+                            f"2. 或者检查知识库中是否有相关文档"
+                        )
+                    
+                    return {
+                        "success": False,
+                        "answer": answer_text,
+                        "sources": [{"title": r["title"], "url": r["url"], "similarity": r["similarity"]} 
+                                   for r in sorted(results_with_content, key=lambda x: x["similarity"], reverse=True)[:3]],
+                        "suggest_web_search": suggest_web,
+                        "max_similarity": max_sim,
+                    }
+                else:
+                    # 如果没有有内容的文档，也不使用无内容的文档（避免误导）
+                    # 判断是否建议使用网络搜索
+                    suggest_web = self._should_use_web_search(question, {
+                        "success": False,
+                        "sources": []
+                    })
+                    
+                    answer_text = (
+                        "抱歉，未找到与您的问题相关的文档。\n\n"
+                    )
+                    
+                    if suggest_web:
+                        answer_text += (
+                            "💡 建议：\n"
+                            "1. 可以尝试使用网络搜索获取更多信息\n"
+                            "2. 或者尝试使用不同的关键词重新提问\n"
+                            "3. 或者检查知识库中是否有相关文档"
+                        )
+                    else:
+                        answer_text += (
+                            "建议：\n"
+                            "1. 尝试使用不同的关键词重新提问\n"
+                            "2. 或者检查知识库中是否有相关文档"
+                        )
+                    
+                    return {
+                        "success": False,
+                        "answer": answer_text,
+                        "sources": [],
+                        "suggest_web_search": suggest_web,
+                        "max_similarity": 0.0,
+                    }
+            
+            # 如果没有有内容的文档，也不使用无内容的文档（避免误导）
+            # 移除原来的逻辑：if not filtered_results and results_without_content
             
             # 取前5个最相关的结果
             top_results = filtered_results[:5]
@@ -820,11 +1050,63 @@ class KnowledgeBaseService:
                 
                 answer = llm_service.generate(prompt)
             
+                # 🔴 新增：验证答案相关性
+                answer_relevance = self._verify_answer_relevance(question, answer, has_content_results)
+                if not answer_relevance.get("is_relevant", True):
+                    log.warning(f"答案相关性验证失败: {answer_relevance.get('reason', '未知原因')}")
+                    # 如果答案不相关，返回提示信息
             return {
+                        "success": False,
+                        "answer": (
+                            f"抱歉，根据提供的文档，无法生成与您的问题高度相关的答案。\n\n"
+                            f"找到的相关文档：\n" + "\n".join([f"- {s['title']}" for s in sources[:3]]) + "\n\n"
+                            f"建议：\n"
+                            f"1. 尝试使用不同的关键词重新提问\n"
+                            f"2. 或者检查知识库中是否有更相关的文档"
+                        ),
+                        "sources": sources,
+                    }
+            
+            # 计算最高相似度，判断是否需要建议网络搜索
+            sources_with_similarity = [s for s in sources if s.get("similarity", 0) > 0]
+            max_similarity = max([s.get("similarity", 0) for s in sources_with_similarity]) if sources_with_similarity else 0.0
+            
+            # 判断是否建议使用网络搜索（即使有答案，如果相似度较低，也建议网络搜索）
+            suggest_web = False
+            if max_similarity > 0 and max_similarity < 0.6:
+                # 如果相似度在0.5-0.6之间，判断是否是通用概念问题
+                if self._is_general_concept_question(question):
+                    suggest_web = True
+            
+            result = {
                 "success": True,
                 "answer": answer.strip(),
                 "sources": sources,
+                "suggest_web_search": suggest_web,
+                "max_similarity": max_similarity,
             }
+            
+            # 保存最终结果并打印
+            log.info("="*80)
+            log.info(f"✅ 问题处理完成")
+            log.info(f"   问题: {question}")
+            log.info(f"   答案长度: {len(answer.strip())} 字符")
+            log.info(f"   引用文档数: {len(sources)}")
+            log.info(f"   最高相似度: {max_similarity:.3f}")
+            if suggest_web:
+                log.info(f"   💡 建议使用网络搜索补充信息")
+            log.info("="*80)
+            
+            self._save_query_result(question, "final_result", {
+                "success": True,
+                "answer_length": len(answer.strip()),
+                "sources_count": len(sources),
+                "max_similarity": max_similarity,
+                "suggest_web_search": suggest_web,
+                "sources": sources[:10]  # 只保存前10个来源
+            }, query_timestamp)
+            
+            return result
             
         except Exception as e:
             log.error(f"实时搜索模式失败: {e}")
@@ -1188,8 +1470,46 @@ class KnowledgeBaseService:
             # 注意：content应该是已经提取的相关片段，不需要再截取前500字符
             # 如果content太长（超过2000字符），截取前2000字符以提高性能
             content_to_embed = content[:2000] if len(content) > 2000 else content
-            question_vector = np.array(embedding_service.embed_text(question))
-            content_vector = np.array(embedding_service.embed_text(content_to_embed))
+            
+            # 确保内容不为空
+            if not content_to_embed or not content_to_embed.strip():
+                log.warning(f"内容为空，返回相似度0.0")
+                return 0.0
+            
+            # 记录embedding服务信息
+            model_name = embedding_service.get_model_name()
+            log.debug(f"使用embedding模型: {model_name}")
+            
+            # 向量化问题
+            question_vector_raw = embedding_service.embed_text(question)
+            question_vector = np.array(question_vector_raw)
+            
+            # 向量化内容
+            content_vector_raw = embedding_service.embed_text(content_to_embed)
+            content_vector = np.array(content_vector_raw)
+            
+            # 验证向量是否有效
+            if question_vector.size == 0 or content_vector.size == 0:
+                log.warning(f"向量为空，返回相似度0.0 (question_size={question_vector.size}, content_size={content_vector.size})")
+                return 0.0
+            
+            # 检查向量维度是否匹配
+            if question_vector.shape != content_vector.shape:
+                log.error(f"向量维度不匹配: question={question_vector.shape}, content={content_vector.shape}")
+                return 0.0
+            
+            # 检查向量是否全为零
+            if np.all(question_vector == 0) or np.all(content_vector == 0):
+                log.warning(f"检测到零向量: question_all_zero={np.all(question_vector == 0)}, content_all_zero={np.all(content_vector == 0)}")
+                log.warning(f"问题向量前5个值: {question_vector[:5]}")
+                log.warning(f"内容向量前5个值: {content_vector[:5]}")
+                # 如果向量全为零，使用关键词匹配作为回退
+                keywords = self._extract_keywords(question)
+                content_lower = content.lower() if content else ""
+                match_count = sum(1 for kw in keywords if kw.lower() in content_lower)
+                estimated_similarity = min(0.4, 0.1 + match_count * 0.05)
+                log.info(f"检测到零向量，使用关键词匹配估计相似度: {estimated_similarity:.3f} (匹配关键词数: {match_count})")
+                return estimated_similarity
             
             # 计算余弦相似度
             dot_product = np.dot(question_vector, content_vector)
@@ -1197,20 +1517,44 @@ class KnowledgeBaseService:
             norm_c = np.linalg.norm(content_vector)
             
             if norm_q == 0 or norm_c == 0:
+                log.warning(f"向量模长为0，返回相似度0.0 (norm_q={norm_q}, norm_c={norm_c})")
                 return 0.0
             
             similarity = dot_product / (norm_q * norm_c)
             
+            # 🔴 修复：处理负数相似度
+            # 余弦相似度范围是-1到1，负数表示向量方向相反或接近垂直
+            # 负数相似度应该被视为低相关性，但不应该被直接截断为0.0
+            if similarity < 0:
+                # 负数相似度表示不相关，设为0.0
+                # 但记录日志以便排查问题
+                log.debug(f"检测到负数相似度: {similarity:.3f} (问题: {question[:50]}..., 内容长度: {len(content_to_embed)})")
+                log.debug(f"点积: {dot_product:.3f}, norm_q: {norm_q:.3f}, norm_c: {norm_c:.3f}")
+                similarity = 0.0
+            else:
             # 确保相似度在0-1范围内
-            return max(0.0, min(1.0, float(similarity)))
+                similarity = min(1.0, float(similarity))
+            
+            # 添加调试日志（仅在相似度异常时）
+            if similarity < 0.1:
+                log.debug(f"相似度较低: {similarity:.3f} (问题: {question[:50]}..., 内容长度: {len(content_to_embed)}, 向量维度: {question_vector.shape[0]})")
+                log.debug(f"问题向量统计: min={question_vector.min():.3f}, max={question_vector.max():.3f}, mean={question_vector.mean():.3f}")
+                log.debug(f"内容向量统计: min={content_vector.min():.3f}, max={content_vector.max():.3f}, mean={content_vector.mean():.3f}")
+            
+            return similarity
             
         except Exception as e:
-            log.warning(f"计算相似度失败: {e}，使用默认值")
-            # 如果计算失败，基于关键词匹配返回一个估计值
+            log.error(f"计算相似度失败: {e}，使用关键词匹配估计值")
+            import traceback
+            log.debug(traceback.format_exc())
+            # 如果计算失败，基于关键词匹配返回一个估计值（但标记为低相似度）
             keywords = self._extract_keywords(question)
-            content_lower = content.lower()
+            content_lower = content.lower() if content else ""
             match_count = sum(1 for kw in keywords if kw.lower() in content_lower)
-            return min(0.8, 0.3 + match_count * 0.1)  # 基础分数0.3，每个关键词匹配+0.1
+            # 降低默认值，避免误判为相关
+            estimated_similarity = min(0.4, 0.1 + match_count * 0.05)  # 基础分数0.1，每个关键词匹配+0.05，最高0.4
+            log.info(f"使用关键词匹配估计相似度: {estimated_similarity:.3f} (匹配关键词数: {match_count})")
+            return estimated_similarity
     
     def _analyze_search_results_with_ai(
         self, 
@@ -1431,6 +1775,13 @@ class KnowledgeBaseService:
 - **结尾**：如有必要，进行总结或补充说明
 
 【注意事项】
+- **相关性检查（最重要）**：
+  - 首先判断文档内容是否真的与用户问题相关
+  - 如果文档内容与问题**完全不相关**或**相关性很低**（相似度<0.5），必须明确说明"根据提供的文档，没有找到与问题相关的信息"
+  - **不要**强行关联不相关的内容
+  - **不要**基于不相关的文档生成答案
+  - 如果文档相似度很低，应该明确拒绝回答，而不是强行生成答案
+
 - 如果文档中没有直接回答问题的信息，可以基于相关内容进行合理推断，但要说明这是基于文档的推断
 - 如果文档内容与问题不完全匹配，说明文档中找到了哪些相关信息，并解释这些信息如何帮助回答问题
 - 如果多个文档有冲突信息，要对比说明并指出差异
@@ -1442,6 +1793,218 @@ class KnowledgeBaseService:
         
         return prompt
 
+    def _verify_answer_relevance(self, question: str, answer: str, search_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        验证答案是否真的回答了用户的问题。
+        
+        Args:
+            question: 用户问题
+            answer: 生成的答案
+            search_results: 搜索结果列表
+            
+        Returns:
+            验证结果，包含is_relevant和reason
+        """
+        try:
+            # 如果搜索结果的平均相似度很低，直接认为不相关
+            if search_results:
+                avg_similarity = sum([r.get("similarity", 0) for r in search_results]) / len(search_results)
+                if avg_similarity < 0.4:
+                    return {
+                        "is_relevant": False,
+                        "reason": f"搜索结果平均相似度过低 ({avg_similarity:.3f} < 0.4)"
+                    }
+            
+            # 提取问题关键词
+            question_keywords = self._extract_keywords(question)
+            if not question_keywords:
+                return {"is_relevant": True, "reason": "无法提取问题关键词"}
+            
+            # 检查答案是否包含问题的主要关键词
+            answer_lower = answer.lower()
+            matched_keywords = [kw for kw in question_keywords if kw.lower() in answer_lower]
+            match_ratio = len(matched_keywords) / len(question_keywords) if question_keywords else 0
+            
+            # 如果匹配的关键词少于50%，认为不相关
+            if match_ratio < 0.5:
+                return {
+                    "is_relevant": False,
+                    "reason": f"答案中匹配的关键词比例过低 ({match_ratio:.2%} < 50%)"
+                }
+            
+            return {"is_relevant": True, "reason": "答案相关性验证通过"}
+            
+        except Exception as e:
+            log.warning(f"答案相关性验证失败: {e}")
+            # 验证失败时，默认认为相关（避免误判）
+            return {"is_relevant": True, "reason": f"验证过程出错: {e}"}
+    
+    def _should_use_web_search(self, question: str, kb_result: Dict[str, Any]) -> bool:
+        """
+        判断是否需要使用网络搜索。
+        
+        Args:
+            question: 用户问题
+            kb_result: 知识库搜索结果
+            
+        Returns:
+            是否需要网络搜索
+        """
+        # 如果知识库搜索成功且有相关文档，检查相似度
+        if kb_result.get("success") and len(kb_result.get("sources", [])) > 0:
+            sources = kb_result.get("sources", [])
+            max_similarity = max([s.get("similarity", 0) for s in sources])
+            
+            # 如果最高相似度>=0.6，认为知识库结果足够好，不需要网络搜索
+            if max_similarity >= 0.6:
+                return False
+            
+            # 如果相似度在0.5-0.6之间，判断是否是通用概念问题
+            if max_similarity >= 0.5:
+                # 判断是否是通用概念问题（如"是什么"、"定义"等）
+                if self._is_general_concept_question(question):
+                    log.info(f"检测到通用概念问题，且文档相似度较低({max_similarity:.3f})，建议使用网络搜索")
+                    return True
+            
+            # 如果相似度<0.5，建议使用网络搜索
+            if max_similarity < 0.5:
+                log.info(f"文档相似度过低({max_similarity:.3f})，建议使用网络搜索")
+                return True
+        
+        # 如果知识库搜索失败或没有找到文档，建议使用网络搜索
+        if not kb_result.get("success") or len(kb_result.get("sources", [])) == 0:
+            log.info("知识库未找到相关文档，建议使用网络搜索")
+            return True
+        
+        return False
+    
+    def _is_general_concept_question(self, question: str) -> bool:
+        """
+        判断是否是通用概念问题。
+        
+        Args:
+            question: 用户问题
+            
+        Returns:
+            是否是通用概念问题
+        """
+        # 通用概念问题的关键词
+        concept_keywords = [
+            "是什么", "什么是", "定义", "含义", "意思", "概念",
+            "介绍", "说明", "解释", "如何理解", "怎么理解"
+        ]
+        
+        question_lower = question.lower()
+        for keyword in concept_keywords:
+            if keyword in question_lower:
+                return True
+        
+        return False
+    
+    def _search_web_and_merge(self, question: str, kb_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        搜索网络并合并结果。
+        
+        Args:
+            question: 用户问题
+            kb_result: 知识库搜索结果
+            
+        Returns:
+            合并后的结果
+        """
+        try:
+            web_service = self.web_search_service
+            if not web_service:
+                log.warning("网络搜索服务不可用，返回知识库结果")
+                return kb_result
+            
+            # 搜索网络
+            web_results = web_service.search(question, max_results=5)
+            
+            if not web_results:
+                log.warning("网络搜索未找到结果，返回知识库结果")
+                return kb_result
+            
+            # 使用LLM合并知识库和网络搜索结果
+            from core.engine.base.llm_service import LLMService
+            llm_service = LLMService()
+            
+            # 构建合并提示词
+            kb_answer = kb_result.get("answer", "")
+            kb_sources = kb_result.get("sources", [])
+            
+            # 构建网络搜索结果摘要
+            web_summary = "\n".join([
+                f"- {r.get('title', '')}: {r.get('snippet', '')[:200]}..."
+                for r in web_results[:3]
+            ])
+            
+            # 构建合并提示词
+            prompt = f"""你是一位专业的AI助手，需要结合知识库信息和网络搜索结果来回答用户问题。
+
+【用户问题】
+{question}
+
+【知识库信息】
+{'找到了以下相关文档：' if kb_sources else '未找到相关文档'}
+{chr(10).join([f'- {s.get("title", "")} (相似度: {s.get("similarity", 0):.2f})' for s in kb_sources[:3]]) if kb_sources else '无'}
+
+{'【知识库答案】' if kb_answer and kb_result.get('success') else ''}
+{kb_answer if kb_answer and kb_result.get('success') else '知识库未找到相关信息'}
+
+【网络搜索结果】
+{web_summary}
+
+【要求】
+1. 优先使用知识库信息（如果知识库有相关信息）
+2. 使用网络搜索结果补充知识库信息的不足
+3. 明确标注信息来源：
+   - 如果信息来自知识库，标注"根据知识库文档..."
+   - 如果信息来自网络搜索，标注"根据网络搜索..."
+4. 如果知识库和网络信息有冲突，优先使用知识库信息
+5. 答案要完整、准确、有条理
+6. 使用简体中文回答
+
+【答案】
+请结合以上信息，回答用户问题：
+"""
+            
+            # 生成合并后的答案
+            merged_answer = llm_service.generate(prompt)
+            
+            # 合并来源
+            merged_sources = list(kb_sources)
+            for web_result in web_results[:3]:
+                merged_sources.append({
+                    "title": web_result.get("title", ""),
+                    "url": web_result.get("url", ""),
+                    "source": "web_search",
+                    "similarity": 0.0,  # 网络搜索结果没有相似度
+                })
+            
+            # 保存网络搜索结果
+            query_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self._save_query_result(question, "web_search", {
+                "results_count": len(web_results),
+                "results": web_results[:5]
+            }, query_timestamp)
+            
+            log.info("✅ 网络搜索结果已合并到答案中")
+            
+            return {
+                "success": True,
+                "answer": merged_answer.strip(),
+                "sources": merged_sources,
+                "has_web_search": True,  # 标记使用了网络搜索
+                "suggest_web_search": False,  # 已经使用了，不再建议
+                "max_similarity": max([s.get("similarity", 0) for s in kb_sources]) if kb_sources else 0.0,
+            }
+            
+        except Exception as e:
+            log.error(f"网络搜索和合并失败: {e}")
+            # 如果网络搜索失败，返回知识库结果
+            return kb_result
+    
     def get_collection_info(self) -> Dict[str, Any]:
         """
         获取向量存储信息。

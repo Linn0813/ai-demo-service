@@ -116,10 +116,11 @@ export const aiApi = {
   },
 
   // 问答接口
-  async askQuestion(question, spaceId = null) {
+  async askQuestion(question, spaceId = null, useWebSearch = false) {
     const response = await aiRequest.post('/api/v1/knowledge-base/ask', {
       question,
-      space_id: spaceId
+      space_id: spaceId,
+      use_web_search: useWebSearch
     })
     return adaptResponse(response)
   },

@@ -43,6 +43,8 @@ logs/
 
 # 调试数据
 data/debug/
+# 飞书Token缓存（包含敏感信息）
+data/feishu_tokens.json
 
 # Node.js / Frontend
 frontend/node_modules/

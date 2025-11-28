@@ -7,8 +7,7 @@
 
     <div class="content">
       <!-- 飞书授权区域（如果需要授权） -->
-      <!-- 临时：添加测试按钮，用于调试 -->
-      <el-card v-if="needsAuth || showAuthCard" class="auth-card" shadow="hover">
+      <el-card v-if="needsAuth" class="auth-card" shadow="hover">
         <template #header>
           <div class="card-header">
             <span>🔐 飞书授权</span>
@@ -23,20 +22,48 @@
           </p>
           <div class="auth-options">
             <div class="auth-option">
-              <h4>方式一：使用用户身份权限（推荐）</h4>
-              <p>点击下方按钮登录飞书并授权，授权后即可使用</p>
+              <h4>方式一：扫码登录（推荐）</h4>
+              <p>使用飞书APP扫码登录，谁扫码就用谁的权限</p>
+              <div v-if="oauthUrl" class="qr-code-container">
+                <div class="qr-code-wrapper">
+                  <img :src="qrCodeUrl" alt="飞书授权二维码" class="qr-code" />
+                  <p class="qr-tip">使用飞书APP扫描二维码</p>
+                </div>
+                <el-button
+                  type="text"
+                  @click="refreshQRCode"
+                  :loading="authing"
+                  size="small"
+                >
+                  {{ authing ? '刷新中...' : '刷新二维码' }}
+                </el-button>
+              </div>
               <el-button
+                v-else
                 type="primary"
                 :loading="authing"
-                @click="handleFeishuAuth"
+                @click="initQRCode"
                 size="default"
               >
-                {{ authing ? '跳转中...' : '登录飞书并授权' }}
+                {{ authing ? '生成中...' : '生成二维码' }}
               </el-button>
             </div>
             <div class="auth-divider">或</div>
             <div class="auth-option">
-              <h4>方式二：申请应用身份权限</h4>
+              <h4>方式二：浏览器登录</h4>
+              <p>在浏览器中打开飞书授权页面</p>
+              <el-button
+                type="default"
+                :loading="authing"
+                @click="handleFeishuAuth"
+                size="default"
+              >
+                {{ authing ? '跳转中...' : '在浏览器中授权' }}
+              </el-button>
+            </div>
+            <div class="auth-divider">或</div>
+            <div class="auth-option">
+              <h4>方式三：申请应用身份权限</h4>
               <p>访问飞书开放平台申请应用身份权限</p>
               <el-button
                 type="default"
@@ -55,17 +82,6 @@
         <template #header>
           <div class="card-header">
             <span>文档同步</span>
-            <div style="display: flex; gap: 10px;">
-              <!-- 临时测试按钮 -->
-              <el-button
-                v-if="!needsAuth && !showAuthCard"
-                type="info"
-                size="small"
-                @click="showAuthCard = true"
-                title="测试：显示授权卡片"
-              >
-                测试授权
-              </el-button>
               <el-button
                 type="primary"
                 :loading="syncing"
@@ -75,7 +91,6 @@
               >
                 {{ syncing ? '同步中...' : '同步所有知识库' }}
               </el-button>
-            </div>
           </div>
         </template>
         <div class="sync-info">
@@ -222,6 +237,15 @@
               @keydown.ctrl.enter="handleAsk"
               @keydown.meta.enter="handleAsk"
             />
+            <!-- 网络搜索选项 -->
+            <div class="web-search-option">
+              <el-checkbox v-model="useWebSearch">
+                <span>🌐 启用网络搜索</span>
+                <el-tooltip content="当知识库结果不理想时，自动使用网络搜索补充信息" placement="top">
+                  <span style="margin-left: 5px; color: #909399; cursor: help;">❓</span>
+                </el-tooltip>
+              </el-checkbox>
+            </div>
             <div class="input-actions">
               <el-button
                 type="primary"
@@ -240,6 +264,37 @@
             <h3>答案</h3>
             <div class="answer-content" v-html="formatAnswer(currentAnswer.answer)"></div>
 
+            <!-- 网络搜索建议按钮 -->
+            <div v-if="currentAnswer.suggest_web_search && !currentAnswer.has_web_search" class="web-search-suggestion">
+              <el-alert
+                type="warning"
+                :closable="false"
+                show-icon
+              >
+                <template #title>
+                  <div class="suggestion-content">
+                    <p>💡 知识库文档相似度较低（{{ (currentAnswer.max_similarity * 100).toFixed(1) }}%），建议使用网络搜索获取更多信息</p>
+                    <el-button
+                      type="primary"
+                      size="small"
+                      :loading="asking"
+                      @click="searchWithWeb"
+                      style="margin-top: 10px;"
+                    >
+                      🌐 使用网络搜索
+                    </el-button>
+                  </div>
+                </template>
+              </el-alert>
+            </div>
+
+            <!-- 已使用网络搜索提示 -->
+            <div v-if="currentAnswer.has_web_search" class="web-search-used">
+              <el-tag type="success" size="small">
+                ✓ 已使用网络搜索补充信息
+              </el-tag>
+            </div>
+
             <!-- 引用来源 -->
             <div v-if="currentAnswer.sources && currentAnswer.sources.length > 0" class="sources-section">
               <h4>引用来源</h4>
@@ -253,7 +308,8 @@
                   >
                     {{ source.title }}
                   </a>
-                  <span class="similarity">相似度: {{ (source.similarity * 100).toFixed(1) }}%</span>
+                  <span v-if="source.similarity > 0" class="similarity">相似度: {{ (source.similarity * 100).toFixed(1) }}%</span>
+                  <span v-else-if="source.source === 'web_search'" class="web-source">🌐 网络搜索</span>
                 </li>
               </ul>
             </div>
@@ -292,7 +348,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { aiApi } from '@/apis/ai'
@@ -304,7 +360,6 @@ const asking = ref(false)
 const syncing = ref(false)
 const authing = ref(false)
 const needsAuth = ref(false) // 是否需要授权（根据错误判断）
-const showAuthCard = ref(false) // 临时：用于测试显示授权卡片
 const currentAnswer = ref(null)
 const syncResult = ref(null)
 const history = ref([])
@@ -313,16 +368,92 @@ const searchMode = ref(null) // 当前搜索模式：'realtime' 或 'vector'
 const wikiSpaces = ref([]) // 知识库空间列表
 const selectedSpaceId = ref(null) // 选中的知识库空间ID
 const loadingSpaces = ref(false) // 加载知识库列表状态
+const useWebSearch = ref(false) // 是否启用网络搜索
+const lastQuestion = ref('') // 保存上次的问题，用于网络搜索
+const oauthUrl = ref('') // OAuth授权URL
+const qrCodeUrl = ref('') // 二维码图片URL
+const checkAuthTimer = ref(null) // 检查授权状态的定时器
+
+// 初始化二维码
+const initQRCode = async () => {
+  authing.value = true
+  try {
+    const response = await aiApi.getFeishuOAuthUrl()
+    if (response.data && response.data.code === 0) {
+      const url = response.data.data.oauth_url
+      if (url) {
+        oauthUrl.value = url
+        // 生成二维码（使用在线API）
+        qrCodeUrl.value = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`
+        // 开始轮询检查授权状态
+        startAuthCheck()
+        ElMessage.success('二维码已生成，请使用飞书APP扫描')
+      } else {
+        ElMessage.error('获取授权URL失败')
+      }
+    } else {
+      ElMessage.error(response.data?.message || '获取授权URL失败')
+    }
+  } catch (error) {
+    console.error('获取授权URL失败:', error)
+    ElMessage.error('获取授权URL失败: ' + (error.message || '未知错误'))
+  } finally {
+    authing.value = false
+  }
+}
+
+// 刷新二维码
+const refreshQRCode = async () => {
+  oauthUrl.value = ''
+  qrCodeUrl.value = ''
+  stopAuthCheck()
+  await initQRCode()
+}
+
+// 开始检查授权状态
+const startAuthCheck = () => {
+  // 每3秒检查一次授权状态
+  checkAuthTimer.value = setInterval(async () => {
+    try {
+      // 尝试加载知识库列表，如果成功说明已授权
+      const response = await aiApi.getWikiSpaces()
+      if (response.data && response.data.code === 0) {
+        const data = response.data.data
+        if (data.success && data.spaces) {
+          // 授权成功
+          stopAuthCheck()
+          needsAuth.value = false
+          oauthUrl.value = ''
+          qrCodeUrl.value = ''
+          ElMessage.success('授权成功！')
+          // 重新加载知识库列表
+          loadWikiSpaces()
+        }
+      }
+    } catch (error) {
+      // 继续等待授权
+      console.debug('等待授权中...')
+    }
+  }, 3000)
+}
+
+// 停止检查授权状态
+const stopAuthCheck = () => {
+  if (checkAuthTimer.value) {
+    clearInterval(checkAuthTimer.value)
+    checkAuthTimer.value = null
+  }
+}
 
 const handleFeishuAuth = async () => {
   authing.value = true
   try {
     const response = await aiApi.getFeishuOAuthUrl()
     if (response.data && response.data.code === 0) {
-      const oauthUrl = response.data.data.oauth_url
-      if (oauthUrl) {
+      const url = response.data.data.oauth_url
+      if (url) {
         // 跳转到飞书授权页面
-        window.location.href = oauthUrl
+        window.location.href = url
       } else {
         ElMessage.error('获取授权URL失败')
       }
@@ -360,15 +491,13 @@ const handleSync = async () => {
         const isAuthError = checkIfAuthError(errorMsg)
       if (isAuthError) {
         needsAuth.value = true
-        showAuthCard.value = true // 确保显示授权卡片
         ElMessage.warning('需要飞书授权才能同步文档')
         return
       }
       ElMessage.error(errorMsg)
     } else {
       ElMessage.success('文档同步成功')
-      needsAuth.value = false
-      showAuthCard.value = false // 同步成功，隐藏授权卡片
+      needsAuth.value = false // 同步成功，清除授权状态
       // 同步成功后，更新搜索模式
       searchMode.value = 'vector'
     }
@@ -377,7 +506,6 @@ const handleSync = async () => {
       const isAuthError = checkIfAuthError(errorMsg)
       if (isAuthError) {
         needsAuth.value = true
-        showAuthCard.value = true // 确保显示授权卡片
         ElMessage.warning('需要飞书授权才能同步文档')
       } else {
         ElMessage.error(errorMsg)
@@ -397,7 +525,6 @@ const handleSync = async () => {
     
     if (isAuthError) {
       needsAuth.value = true
-      showAuthCard.value = true // 确保显示授权卡片
       ElMessage.warning('需要飞书授权才能同步文档')
     } else {
       ElMessage.error('同步失败: ' + fullErrorMsg)
@@ -431,15 +558,23 @@ const handleAsk = async () => {
 
   asking.value = true
   const currentQuestion = question.value.trim()
+  lastQuestion.value = currentQuestion // 保存问题，用于网络搜索
 
   try {
-    // 传递选中的知识库ID（如果选择了）
-    const response = await aiApi.askQuestion(currentQuestion, selectedSpaceId.value || null)
+    // 传递选中的知识库ID和网络搜索选项
+    const response = await aiApi.askQuestion(
+      currentQuestion, 
+      selectedSpaceId.value || null,
+      useWebSearch.value
+    )
     if (response.data && response.data.code === 0) {
       const data = response.data.data
       currentAnswer.value = {
         answer: data.answer,
-        sources: data.sources || []
+        sources: data.sources || [],
+        suggest_web_search: data.suggest_web_search || false,
+        has_web_search: data.has_web_search || false,
+        max_similarity: data.max_similarity || 0
       }
 
       // 根据答案判断使用的搜索模式
@@ -459,7 +594,8 @@ const handleAsk = async () => {
       history.value.unshift({
         question: currentQuestion,
         answer: data.answer,
-        sources: data.sources || []
+        sources: data.sources || [],
+        has_web_search: data.has_web_search || false
       })
 
       // 清空问题输入
@@ -469,14 +605,73 @@ const handleAsk = async () => {
     }
   } catch (error) {
     console.error('提问失败:', error)
-    ElMessage.error('提问失败: ' + (error.message || '未知错误'))
+    const errorMsg = error.message || '未知错误'
+    const errorDetail = error.response?.data?.detail || error.response?.data?.message || error.response?.data?.data?.message || ''
+    const fullErrorMsg = errorDetail || errorMsg
+    
+    // 检查是否是权限错误
+    const isAuthError = checkIfAuthError(fullErrorMsg) || error.response?.status === 403
+    
+    if (isAuthError) {
+      needsAuth.value = true // 自动显示授权卡片
+      ElMessage.warning('需要飞书授权才能使用知识库功能')
+    } else {
+      ElMessage.error('提问失败: ' + fullErrorMsg)
+    }
   } finally {
     asking.value = false
   }
 }
 
-// 加载知识库空间列表
-const loadWikiSpaces = async () => {
+// 使用网络搜索
+const searchWithWeb = async () => {
+  if (!lastQuestion.value.trim()) {
+    ElMessage.warning('没有可搜索的问题')
+    return
+  }
+
+  asking.value = true
+  try {
+    // 使用相同的问题，但启用网络搜索
+    const response = await aiApi.askQuestion(
+      lastQuestion.value,
+      selectedSpaceId.value || null,
+      true // 启用网络搜索
+    )
+    if (response.data && response.data.code === 0) {
+      const data = response.data.data
+      currentAnswer.value = {
+        answer: data.answer,
+        sources: data.sources || [],
+        suggest_web_search: false, // 已经使用了，不再建议
+        has_web_search: data.has_web_search || false,
+        max_similarity: data.max_similarity || 0
+      }
+
+      // 更新历史记录中的最后一条
+      if (history.value.length > 0 && history.value[0].question === lastQuestion.value) {
+        history.value[0] = {
+          question: lastQuestion.value,
+          answer: data.answer,
+          sources: data.sources || [],
+          has_web_search: true
+        }
+      }
+
+      ElMessage.success('已使用网络搜索补充信息')
+    } else {
+      ElMessage.error(response.data?.message || '网络搜索失败')
+    }
+  } catch (error) {
+    console.error('网络搜索失败:', error)
+    ElMessage.error('网络搜索失败: ' + (error.message || '未知错误'))
+  } finally {
+    asking.value = false
+  }
+}
+
+// 加载知识库空间列表（带重试机制）
+const loadWikiSpaces = async (retryCount = 0) => {
   loadingSpaces.value = true
   try {
     const response = await aiApi.getWikiSpaces()
@@ -484,24 +679,44 @@ const loadWikiSpaces = async () => {
       const data = response.data.data
       if (data.success && data.spaces) {
         wikiSpaces.value = data.spaces
+        needsAuth.value = false // 加载成功，清除授权状态
         // 不显示成功消息，避免干扰用户
       } else {
-        // 只在失败时显示警告
-        if (data.message && !checkIfAuthError(data.message)) {
-          ElMessage.warning(data.message || '获取知识库列表失败')
+        // 检查是否是权限错误
+        const errorMsg = data.message || '获取知识库列表失败'
+        const isAuthError = checkIfAuthError(errorMsg)
+        if (isAuthError) {
+          needsAuth.value = true // 自动显示授权卡片
+        } else {
+          ElMessage.warning(errorMsg)
         }
       }
     } else {
       const errorMsg = response.data?.message || '获取知识库列表失败'
-      if (!checkIfAuthError(errorMsg)) {
+      const isAuthError = checkIfAuthError(errorMsg)
+      if (isAuthError) {
+        needsAuth.value = true // 自动显示授权卡片
+      } else {
         ElMessage.error(errorMsg)
       }
     }
   } catch (error) {
     console.error('加载知识库列表失败:', error)
     const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '未知错误'
-    // 如果是权限错误，不显示错误消息（因为授权卡片会显示）
-    if (!checkIfAuthError(errorMsg)) {
+    const isAuthError = checkIfAuthError(errorMsg) || error.response?.status === 403
+    
+    // 如果是连接错误且重试次数少于3次，则重试
+    if (!isAuthError && (error.code === 'ECONNRESET' || error.message?.includes('ECONNRESET')) && retryCount < 3) {
+      console.log(`连接重置，${1000 * (retryCount + 1)}ms后重试...`)
+      setTimeout(() => {
+        loadWikiSpaces(retryCount + 1)
+      }, 1000 * (retryCount + 1))
+      return
+    }
+    
+    if (isAuthError) {
+      needsAuth.value = true // 自动显示授权卡片
+    } else {
       ElMessage.error('加载知识库列表失败: ' + errorMsg)
     }
   } finally {
@@ -509,8 +724,8 @@ const loadWikiSpaces = async () => {
   }
 }
 
-// 检查向量存储状态
-const checkVectorStoreStatus = async () => {
+// 检查向量存储状态（带重试机制）
+const checkVectorStoreStatus = async (retryCount = 0) => {
   try {
     const response = await aiApi.getCollectionInfo()
     if (response.data && response.data.code === 0) {
@@ -523,6 +738,14 @@ const checkVectorStoreStatus = async () => {
       }
     }
   } catch (error) {
+    // 如果是连接错误且重试次数少于3次，则重试
+    if ((error.code === 'ECONNRESET' || error.message?.includes('ECONNRESET')) && retryCount < 3) {
+      console.log(`连接重置，${1000 * (retryCount + 1)}ms后重试...`)
+      setTimeout(() => {
+        checkVectorStoreStatus(retryCount + 1)
+      }, 1000 * (retryCount + 1))
+      return
+    }
     // 如果检查失败，默认使用实时搜索模式
     searchMode.value = 'realtime'
   }
@@ -549,10 +772,11 @@ onMounted(() => {
   if (authSuccess === 'true') {
     // OAuth回调成功，显示成功消息
     ElMessage.success('授权成功！现在可以使用知识库功能了')
-    needsAuth.value = false // 授权成功，不需要授权
-    showAuthCard.value = false // 隐藏授权卡片
+    needsAuth.value = false // 授权成功，清除授权状态
     // 清除URL中的auth_success参数
     window.history.replaceState({}, '', window.location.pathname)
+    // 重新加载知识库列表
+    loadWikiSpaces()
   }
   
   // 检查URL参数中是否有code（直接OAuth回调，虽然通常不会发生，但保留兼容性）
@@ -560,17 +784,28 @@ onMounted(() => {
   if (code) {
     // OAuth回调，显示成功消息
     ElMessage.success('授权成功！现在可以使用知识库功能了')
-    needsAuth.value = false // 授权成功，不需要授权
-    showAuthCard.value = false // 隐藏授权卡片
+    needsAuth.value = false // 授权成功，清除授权状态
     // 清除URL中的code参数
     window.history.replaceState({}, '', window.location.pathname)
+    // 重新加载知识库列表
+    loadWikiSpaces()
   }
   
   // 检查向量存储状态，确定搜索模式
   checkVectorStoreStatus()
   
-  // 加载知识库空间列表
+  // 加载知识库空间列表（会自动检测授权状态）
   loadWikiSpaces()
+  
+  // 如果需要授权，自动生成二维码
+  if (needsAuth.value) {
+    initQRCode()
+  }
+})
+
+// 组件卸载时清理定时器
+onBeforeUnmount(() => {
+  stopAuthCheck()
 })
 </script>
 
@@ -652,6 +887,40 @@ onMounted(() => {
   margin-bottom: 15px;
   color: #666;
   font-size: 14px;
+}
+
+.qr-code-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  padding: 20px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  margin-top: 15px;
+}
+
+.qr-code-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.qr-code {
+  width: 200px;
+  height: 200px;
+  border: 2px solid #e4e7ed;
+  border-radius: 8px;
+  background: white;
+  padding: 10px;
+}
+
+.qr-tip {
+  margin: 0;
+  color: #666;
+  font-size: 13px;
+  text-align: center;
 }
 
 .auth-divider {
@@ -789,6 +1058,37 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.web-search-option {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.web-search-suggestion {
+  margin-top: 20px;
+}
+
+.suggestion-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.suggestion-content p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.web-search-used {
+  margin-top: 15px;
+  margin-bottom: 10px;
+}
+
+.web-source {
+  color: #67c23a;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .input-actions {

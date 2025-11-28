@@ -527,18 +527,33 @@ def ask_question(payload: AskQuestionRequest) -> AskQuestionResponse:
         service = KnowledgeBaseService()
         # 尝试访问rag_engine以触发依赖检查
         _ = service.rag_engine  # 这会触发延迟初始化，如果缺少依赖会抛出ImportError
-        result = service.ask(payload.question, space_id=payload.space_id)
+        result = service.ask(
+            payload.question, 
+            space_id=payload.space_id,
+            use_web_search=payload.use_web_search
+        )
         
-        # 转换sources格式
-        sources = [
-            {"title": s["title"], "url": s["url"], "similarity": s["similarity"]}
-            for s in result.get("sources", [])
-        ]
+        # 转换sources格式（过滤掉网络搜索来源的similarity，因为网络搜索没有相似度）
+        sources = []
+        for s in result.get("sources", []):
+            source_info = {
+                "title": s["title"],
+                "url": s["url"],
+            }
+            # 如果是网络搜索来源，similarity为0；否则使用实际相似度
+            if s.get("source") == "web_search":
+                source_info["similarity"] = 0.0
+            else:
+                source_info["similarity"] = s.get("similarity", 0.0)
+            sources.append(source_info)
         
         return AskQuestionResponse(
             success=result["success"],
             answer=result["answer"],
             sources=sources,
+            has_web_search=result.get("has_web_search", False),
+            suggest_web_search=result.get("suggest_web_search", False),
+            max_similarity=result.get("max_similarity"),
         )
     except ImportError as exc:
         log.warning(f"知识库依赖未安装: {exc}")
