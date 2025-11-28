@@ -51,18 +51,19 @@ class KnowledgeBaseService:
                 ) from e
         return self._rag_engine
 
-    def sync_documents_from_space(self, space_id: str) -> Dict[str, Any]:
+    def sync_documents_from_space(self, space_id: str, incremental: bool = True) -> Dict[str, Any]:
         """
-        从知识库空间同步文档。
+        从知识库空间同步文档（支持增量同步）。
 
         Args:
             space_id: 知识库空间ID
+            incremental: 是否使用增量同步（默认True）
 
         Returns:
             同步结果，包含同步的文档数量和状态
         """
         try:
-            log.info(f"开始同步知识库空间: {space_id}")
+            log.info(f"开始同步知识库空间: {space_id} (增量模式: {incremental})")
 
             # 加载所有文档
             documents = self.document_loader.load_all_documents_from_space(space_id)
@@ -72,29 +73,137 @@ class KnowledgeBaseService:
                     "success": False,
                     "message": "未找到文档",
                     "document_count": 0,
+                    "new_count": 0,
+                    "updated_count": 0,
+                    "skipped_count": 0,
                 }
 
-            # 准备文档数据
+            # 增量同步：获取已有文档的更新时间
+            existing_docs = {}
+            if incremental:
+                existing_docs = self.rag_engine.vector_store.get_documents_by_space(space_id)
+                log.info(f"向量库中已有 {len(existing_docs)} 个文档")
+            
+            # 辅助函数：比较更新时间
+            def compare_update_time(time1: Any, time2: Any) -> int:
+                """
+                比较两个更新时间，返回：
+                -1: time1 < time2
+                 0: time1 == time2
+                 1: time1 > time2
+                """
+                if not time1 or not time2:
+                    return 0  # 如果任一时间为空，认为相等（需要同步）
+                
+                # 转换为整数时间戳进行比较
+                try:
+                    t1 = int(time1) if isinstance(time1, (int, str)) else 0
+                    t2 = int(time2) if isinstance(time2, (int, str)) else 0
+                    if t1 < t2:
+                        return -1
+                    elif t1 > t2:
+                        return 1
+                    else:
+                        return 0
+                except (ValueError, TypeError):
+                    # 如果转换失败，认为需要同步
+                    return 0
+
+            # 准备文档数据（只同步新增或更新的文档）
             doc_data = []
+            new_count = 0
+            updated_count = 0
+            skipped_count = 0
+            current_doc_tokens = set()
+
             for doc in documents:
+                doc_token = doc["token"]
+                current_doc_tokens.add(doc_token)
+                doc_update_time = doc["meta"].get("update_time")
+                
+                # 增量同步：检查是否需要更新
+                if incremental and doc_token in existing_docs:
+                    existing_update_time = existing_docs[doc_token].get("update_time")
+                    # 比较更新时间
+                    cmp_result = compare_update_time(doc_update_time, existing_update_time)
+                    if cmp_result <= 0:  # 文档未更新或时间相同
+                        skipped_count += 1
+                        log.debug(f"跳过未更新的文档: {doc['meta'].get('title', '未知')} (更新时间: {doc_update_time})")
+                        continue
+                    updated_count += 1
+                    log.debug(f"文档已更新: {doc['meta'].get('title', '未知')} (旧: {existing_update_time}, 新: {doc_update_time})")
+                else:
+                    new_count += 1
+
                 doc_data.append({
-                    "id": doc["token"],
+                    "id": doc_token,
                     "content": doc["content"],
                     "metadata": {
                         "title": doc["meta"].get("title", "未知标题"),
                         "url": doc["meta"].get("url", ""),
                         "space_id": space_id,
                         "document_id": doc["meta"].get("document_id", ""),
+                        "update_time": doc_update_time,  # 添加更新时间
                     },
                 })
 
-            # 索引文档
-            indexed_count = self.rag_engine.index_documents(doc_data)
+            # 删除已不存在的文档（增量同步时）
+            deleted_count = 0
+            if incremental and existing_docs:
+                deleted_tokens = set(existing_docs.keys()) - current_doc_tokens
+                if deleted_tokens:
+                    log.info(f"发现 {len(deleted_tokens)} 个已删除的文档，准备清理...")
+                    for deleted_token in deleted_tokens:
+                        # 删除该文档的所有chunk（chunk_id格式：{token}_chunk_{idx}）
+                        try:
+                            # 查询该文档的所有chunk
+                            all_docs = self.rag_engine.vector_store._collection.get(
+                                where={"space_id": space_id}
+                            )
+                            chunk_ids_to_delete = [
+                                doc_id for doc_id in all_docs.get("ids", [])
+                                if doc_id.startswith(f"{deleted_token}_chunk_") or doc_id == deleted_token
+                            ]
+                            if chunk_ids_to_delete:
+                                self.rag_engine.vector_store.delete(ids=chunk_ids_to_delete)
+                                deleted_count += 1
+                                log.info(f"已删除文档: {deleted_token}")
+                        except Exception as e:
+                            log.warning(f"删除文档失败 {deleted_token}: {e}")
+
+            # 如果有需要同步的文档，先删除旧版本再索引新版本
+            if doc_data:
+                # 先删除需要更新的文档的旧版本
+                if incremental:
+                    tokens_to_update = {doc["id"] for doc in doc_data}
+                    for token in tokens_to_update:
+                        try:
+                            all_docs = self.rag_engine.vector_store._collection.get(
+                                where={"space_id": space_id}
+                            )
+                            chunk_ids_to_delete = [
+                                doc_id for doc_id in all_docs.get("ids", [])
+                                if doc_id.startswith(f"{token}_chunk_") or doc_id == token
+                            ]
+                            if chunk_ids_to_delete:
+                                self.rag_engine.vector_store.delete(ids=chunk_ids_to_delete)
+                        except Exception as e:
+                            log.warning(f"删除旧版本失败 {token}: {e}")
+
+                # 索引文档
+                indexed_count = self.rag_engine.index_documents(doc_data)
+            else:
+                indexed_count = 0
+                log.info("没有需要同步的文档")
 
             return {
                 "success": True,
                 "message": "同步成功",
                 "document_count": len(documents),
+                "new_count": new_count,
+                "updated_count": updated_count,
+                "skipped_count": skipped_count,
+                "deleted_count": deleted_count,
                 "indexed_count": indexed_count,
             }
 
@@ -104,11 +213,18 @@ class KnowledgeBaseService:
                 "success": False,
                 "message": f"同步失败: {str(e)}",
                 "document_count": 0,
+                "new_count": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "deleted_count": 0,
             }
 
-    def sync_all_spaces(self) -> Dict[str, Any]:
+    def sync_all_spaces(self, incremental: bool = True) -> Dict[str, Any]:
         """
         同步所有知识库空间。
+
+        Args:
+            incremental: 是否使用增量同步（默认True）
 
         Returns:
             同步结果
@@ -118,6 +234,10 @@ class KnowledgeBaseService:
             spaces = self.document_loader.load_wiki_spaces()
 
             total_documents = 0
+            total_new = 0
+            total_updated = 0
+            total_skipped = 0
+            total_deleted = 0
             success_count = 0
             failed_spaces = []
 
@@ -130,10 +250,14 @@ class KnowledgeBaseService:
 
                 log.info(f"同步知识库空间: {space_name} ({space_id})")
 
-                result = self.sync_documents_from_space(space_id)
+                result = self.sync_documents_from_space(space_id, incremental=incremental)
                 if result["success"]:
                     success_count += 1
                     total_documents += result["document_count"]
+                    total_new += result.get("new_count", 0)
+                    total_updated += result.get("updated_count", 0)
+                    total_skipped += result.get("skipped_count", 0)
+                    total_deleted += result.get("deleted_count", 0)
                 else:
                     failed_spaces.append({
                         "space_id": space_id,
@@ -141,13 +265,18 @@ class KnowledgeBaseService:
                         "error": result["message"],
                     })
 
+            sync_mode = "增量" if incremental else "全量"
             return {
                 "success": True,
-                "message": f"同步完成：成功 {success_count} 个，失败 {len(failed_spaces)} 个",
+                "message": f"同步完成（{sync_mode}模式）：成功 {success_count} 个，失败 {len(failed_spaces)} 个",
                 "total_spaces": len(spaces),
                 "success_count": success_count,
                 "failed_count": len(failed_spaces),
                 "total_documents": total_documents,
+                "new_count": total_new,
+                "updated_count": total_updated,
+                "skipped_count": total_skipped,
+                "deleted_count": total_deleted,
                 "failed_spaces": failed_spaces,
             }
 
@@ -156,7 +285,17 @@ class KnowledgeBaseService:
             log.error(f"同步所有知识库失败: {e}")
             
             # 检查是否是权限错误，如果是则重新抛出以便API层处理
-            if "99991672" in error_msg or "权限" in error_msg or "Access denied" in error_msg:
+            is_auth_error = (
+                "99991672" in error_msg or 
+                "99991663" in error_msg or 
+                "99991664" in error_msg or 
+                "99991679" in error_msg or
+                "权限" in error_msg or 
+                "Access denied" in error_msg or
+                "unauthorized" in error_msg.lower() or
+                "forbidden" in error_msg.lower()
+            )
+            if is_auth_error:
                 raise  # 重新抛出异常，让API层返回403
             
             return {
@@ -278,8 +417,18 @@ class KnowledgeBaseService:
         except Exception as e:
             log.error(f"获取知识库空间列表失败: {e}")
             error_msg = str(e)
-            # 检查是否是权限错误
-            if "99991672" in error_msg or "权限" in error_msg or "Access denied" in error_msg:
+            # 检查是否是权限错误（包括各种权限错误码）
+            is_auth_error = (
+                "99991672" in error_msg or 
+                "99991663" in error_msg or 
+                "99991664" in error_msg or 
+                "99991679" in error_msg or
+                "权限" in error_msg or 
+                "Access denied" in error_msg or
+                "unauthorized" in error_msg.lower() or
+                "forbidden" in error_msg.lower()
+            )
+            if is_auth_error:
                 return {
                     "success": False,
                     "spaces": [],
@@ -384,11 +533,25 @@ class KnowledgeBaseService:
                     }
                 log.info(f"将搜索所有 {len(spaces)} 个知识库空间")
             
+            # 【问题类型识别】检测问题类型
+            question_type_info = self._detect_question_type(question)
+            question_type = question_type_info.get("type", "content_qa")
+            type_confidence = question_type_info.get("confidence", 0.5)
+            subtype = question_type_info.get("subtype", "normal")
+            
+            log.info(f"📋 问题类型识别:")
+            log.info(f"  类型: {question_type} ({subtype})")
+            log.info(f"  置信度: {type_confidence:.2f}")
+            
             # 【AI分析问题】使用LLM分析问题并提取搜索关键词和策略
             search_strategy = self._analyze_question_with_ai(question)
             keywords = search_strategy.get("keywords", [])
             search_queries = search_strategy.get("search_queries", [question])
             related_concepts = search_strategy.get("related_concepts", [])
+            
+            # 如果是文档列表查询，优先使用检测到的关键词
+            if question_type == "document_list" and question_type_info.get("keywords"):
+                keywords = list(set(keywords + question_type_info["keywords"]))
             
             log.info(f"📊 AI分析结果:")
             log.info(f"  关键词: {keywords}")
@@ -587,7 +750,9 @@ class KnowledgeBaseService:
             import time
             
             # 从搜索结果中提取URL（如果有）
+            log.info(f"📋 准备加载 {len(all_results)} 个文档的内容（限制加载前15个）...")
             for idx, result in enumerate(all_results[:15]):  # 限制加载数量以提高性能
+                log.info(f"📋 [{idx+1}/{min(len(all_results), 15)}] 处理文档: {result.get('title', '未知标题')}")
                 try:
                     # 添加延迟以避免频率限制（每3个文档间隔0.5秒）
                     if idx > 0 and idx % 3 == 0:
@@ -730,6 +895,7 @@ class KnowledgeBaseService:
                         # 如果没有内容，但至少保留标题和URL
                         if title and title != "未知标题":
                             # 使用标题作为内容片段（至少让用户知道找到了相关文档）
+                            log.info(f"⚠️ 文档 {title} 无法获取完整内容，但保留标题和URL")
                             doc_results.append({
                                 "title": title,
                                 "url": url,
@@ -739,6 +905,8 @@ class KnowledgeBaseService:
                                 "obj_token": result.get("obj_token", ""),
                                 "has_content": False,  # 标记为没有完整内容
                             })
+                        else:
+                            log.warning(f"⚠️ 文档标题为空，跳过: obj_token={result.get('obj_token', '')[:30]}...")
                         continue
                     
                     # 提取最相关的文档片段
@@ -768,11 +936,12 @@ class KnowledgeBaseService:
                         "has_content": True,  # 标记为有完整内容
                     })
                 except Exception as e:
-                    log.warning(f"处理文档 {result.get('title', '未知')} 失败: {e}")
+                    log.warning(f"❌ 处理文档 {result.get('title', '未知')} 失败: {e}")
                     # 即使处理失败，也尝试保留标题和URL
                     title = result.get("title", "未知标题")
                     url = result.get("url", "")
                     if title and title != "未知标题":
+                        log.info(f"⚠️ 文档 {title} 处理失败，但保留标题和URL")
                         doc_results.append({
                             "title": title,
                             "url": url,
@@ -782,7 +951,11 @@ class KnowledgeBaseService:
                             "obj_token": result.get("obj_token", ""),
                             "has_content": False,
                         })
+                    else:
+                        log.warning(f"⚠️ 文档处理失败且标题为空，完全跳过: obj_token={result.get('obj_token', '')[:30]}...")
                     continue
+            
+            log.info(f"📊 内容加载完成：共处理 {len(doc_results)} 个文档结果")
             
             # 按相似度排序（优先有完整内容的文档）
             doc_results.sort(key=lambda x: (x.get("has_content", False), x["similarity"]), reverse=True)
@@ -791,8 +964,18 @@ class KnowledgeBaseService:
             results_with_content = [r for r in doc_results if r.get("has_content", True)]
             results_without_content = [r for r in doc_results if not r.get("has_content", True)]
             
-            # 优先使用有内容的文档，相似度阈值提高到0.5（更严格的相关性要求）
-            MIN_SIMILARITY_THRESHOLD = 0.5
+            # 根据问题类型设置不同的相似度阈值
+            if question_type == "document_list":
+                # 文档列表查询：使用更低的阈值，返回更多文档
+                MIN_SIMILARITY_THRESHOLD = 0.2
+                MAX_RESULTS = 30  # 返回更多文档
+                log.info(f"📋 文档列表查询模式：阈值={MIN_SIMILARITY_THRESHOLD}, 最大结果数={MAX_RESULTS}")
+            else:
+                # 内容问答：使用较高的阈值，确保相关性
+                MIN_SIMILARITY_THRESHOLD = 0.5
+                MAX_RESULTS = 5  # 只返回最相关的几个文档
+                log.info(f"💬 内容问答模式：阈值={MIN_SIMILARITY_THRESHOLD}, 最大结果数={MAX_RESULTS}")
+            
             filtered_results = [r for r in results_with_content if r["similarity"] >= MIN_SIMILARITY_THRESHOLD]
             
             # 记录相似度信息用于调试
@@ -831,7 +1014,51 @@ class KnowledgeBaseService:
                 ]
             }, query_timestamp)
             
-            # 🔴 修复：如果没有达到阈值的文档，明确拒绝，不再强制返回
+            # 如果是文档列表查询，即使没有达到阈值也返回文档列表
+            if question_type == "document_list":
+                # 文档列表查询：合并有内容和无内容的文档
+                # 对于无内容的文档，给予默认相似度0.3（因为至少标题匹配）
+                all_documents = []
+                
+                # 添加有内容的文档（按相似度排序）
+                for doc in sorted(results_with_content, key=lambda x: x["similarity"], reverse=True):
+                    all_documents.append(doc)
+                
+                # 添加无内容的文档（至少显示标题和URL）
+                for doc in results_without_content:
+                    # 确保无内容文档有相似度值（如果没有则使用默认值0.3）
+                    if "similarity" not in doc or doc.get("similarity", 0) == 0:
+                        doc["similarity"] = 0.3
+                    all_documents.append(doc)
+                
+                # 限制返回数量
+                document_list_results = all_documents[:MAX_RESULTS]
+                
+                log.info(f"📋 文档列表查询：找到 {len(document_list_results)} 个文档（有内容: {len(results_with_content)}, 无内容: {len(results_without_content)}）")
+                
+                if document_list_results:
+                    # 格式化文档列表
+                    answer_text = self._format_document_list(document_list_results, question, subtype)
+                    
+                    return {
+                        "success": True,
+                        "answer": answer_text,
+                        "sources": [{"title": r["title"], "url": r["url"], "similarity": r.get("similarity", 0.3)} 
+                                   for r in document_list_results],
+                        "question_type": "document_list",
+                        "max_similarity": max([r.get("similarity", 0.3) for r in document_list_results]) if document_list_results else 0.0,
+                    }
+                else:
+                    # 没有找到文档
+                    return {
+                        "success": False,
+                        "answer": "未找到相关文档。\n\n建议：\n1. 尝试使用不同的关键词重新搜索\n2. 或者检查知识库中是否有相关文档",
+                        "sources": [],
+                        "question_type": "document_list",
+                        "max_similarity": 0.0,
+                    }
+            
+            # 🔴 内容问答模式：如果没有达到阈值的文档，明确拒绝，不再强制返回
             if not filtered_results:
                 log.warning(f"未找到相似度>={MIN_SIMILARITY_THRESHOLD}的相关文档")
                 if results_with_content:
@@ -872,6 +1099,7 @@ class KnowledgeBaseService:
                                    for r in sorted(results_with_content, key=lambda x: x["similarity"], reverse=True)[:3]],
                         "suggest_web_search": suggest_web,
                         "max_similarity": max_sim,
+                        "question_type": "content_qa",
                     }
                 else:
                     # 如果没有有内容的文档，也不使用无内容的文档（避免误导）
@@ -910,8 +1138,8 @@ class KnowledgeBaseService:
             # 如果没有有内容的文档，也不使用无内容的文档（避免误导）
             # 移除原来的逻辑：if not filtered_results and results_without_content
             
-            # 取前5个最相关的结果
-            top_results = filtered_results[:5]
+            # 根据问题类型取不同数量的结果
+            top_results = filtered_results[:MAX_RESULTS]
             
             # 统计有内容和无内容的文档数量
             content_count = sum(1 for r in top_results if r.get("has_content", True))
@@ -970,6 +1198,19 @@ class KnowledgeBaseService:
                 })
             
             context = "\n\n".join(context_parts)
+            
+            # 如果是文档列表查询模式，且找到了文档，直接返回文档列表
+            if question_type == "document_list" and top_results:
+                log.info(f"📋 文档列表查询模式：返回 {len(top_results)} 个文档")
+                answer_text = self._format_document_list(top_results, question, subtype)
+                return {
+                    "success": True,
+                    "answer": answer_text,
+                    "sources": [{"title": r["title"], "url": r["url"], "similarity": r["similarity"]} 
+                               for r in top_results],
+                    "question_type": "document_list",
+                    "max_similarity": max([r["similarity"] for r in top_results]) if top_results else 0.0,
+                }
             
             # 检查是否有文档内容
             has_document_content = len(has_content_results) > 0
@@ -1055,7 +1296,7 @@ class KnowledgeBaseService:
                 if not answer_relevance.get("is_relevant", True):
                     log.warning(f"答案相关性验证失败: {answer_relevance.get('reason', '未知原因')}")
                     # 如果答案不相关，返回提示信息
-            return {
+                    return {
                         "success": False,
                         "answer": (
                             f"抱歉，根据提供的文档，无法生成与您的问题高度相关的答案。\n\n"
@@ -1065,6 +1306,7 @@ class KnowledgeBaseService:
                             f"2. 或者检查知识库中是否有更相关的文档"
                         ),
                         "sources": sources,
+                        "question_type": "content_qa",
                     }
             
             # 计算最高相似度，判断是否需要建议网络搜索
@@ -1084,6 +1326,7 @@ class KnowledgeBaseService:
                 "sources": sources,
                 "suggest_web_search": suggest_web,
                 "max_similarity": max_similarity,
+                "question_type": question_type,
             }
             
             # 保存最终结果并打印
@@ -1116,6 +1359,97 @@ class KnowledgeBaseService:
                 "success": False,
                 "answer": f"实时搜索失败: {str(e)}",
                 "sources": [],
+            }
+    
+    def _detect_question_type(self, question: str) -> Dict[str, Any]:
+        """
+        检测问题类型：文档列表查询 vs 内容问答
+        
+        Args:
+            question: 用户问题
+            
+        Returns:
+            {
+                "type": "document_list" | "content_qa" | "mixed",
+                "confidence": 0.0-1.0,
+                "keywords": ["关键词列表"]
+            }
+        """
+        question_lower = question.lower()
+        
+        # 文档列表查询的关键词模式
+        list_patterns = [
+            "有哪些", "哪些文档", "相关文档", "文档列表", "列出", 
+            "找到", "搜索", "查找", "文档", "哪些文档",
+            "什么文档", "有什么文档", "包含哪些", "涉及哪些",
+            "what documents", "list", "find documents", "search documents",
+            "相关", "关于.*的文档", ".*文档.*有哪些"
+        ]
+        
+        # 统计查询的关键词
+        stats_patterns = [
+            "有多少", "数量", "统计", "总数", "几个", "多少文档",
+            "how many", "count", "number of"
+        ]
+        
+        # 对比查询的关键词
+        comparison_patterns = [
+            "对比", "区别", "差异", "比较", "vs", "versus", "和.*的区别",
+            "compare", "difference", "vs"
+        ]
+        
+        # 检查文档列表查询
+        list_score = 0.0
+        for pattern in list_patterns:
+            if pattern in question_lower:
+                list_score += 0.3
+                if pattern in ["有哪些", "哪些文档", "文档列表", "list"]:
+                    list_score += 0.4  # 更强的信号
+        
+        # 检查统计查询
+        stats_score = 0.0
+        for pattern in stats_patterns:
+            if pattern in question_lower:
+                stats_score += 0.5
+        
+        # 检查对比查询
+        comparison_score = 0.0
+        for pattern in comparison_patterns:
+            if pattern in question_lower:
+                comparison_score += 0.5
+        
+        # 提取关键词（用于后续搜索）
+        keywords = self._extract_keywords(question)
+        
+        # 判断问题类型
+        if list_score >= 0.5:
+            return {
+                "type": "document_list",
+                "confidence": min(list_score, 1.0),
+                "keywords": keywords,
+                "subtype": "stats" if stats_score > 0.3 else "list"
+            }
+        elif stats_score >= 0.3:
+            return {
+                "type": "document_list",  # 统计查询也归类为文档列表
+                "confidence": min(stats_score, 1.0),
+                "keywords": keywords,
+                "subtype": "stats"
+            }
+        elif comparison_score >= 0.3:
+            return {
+                "type": "content_qa",  # 对比查询需要内容分析
+                "confidence": min(comparison_score, 1.0),
+                "keywords": keywords,
+                "subtype": "comparison"
+            }
+        else:
+            # 默认是内容问答
+            return {
+                "type": "content_qa",
+                "confidence": 0.5,
+                "keywords": keywords,
+                "subtype": "normal"
             }
     
     def _analyze_question_with_ai(self, question: str) -> Dict[str, Any]:
@@ -1300,6 +1634,65 @@ class KnowledgeBaseService:
                         break
         
         return unique_keywords[:5]  # 最多返回5个关键词
+    
+    def _format_document_list(self, documents: List[Dict[str, Any]], question: str, subtype: str = "list") -> str:
+        """
+        格式化文档列表为答案文本。
+        
+        Args:
+            documents: 文档列表
+            question: 用户问题
+            subtype: 问题子类型（list/stats）
+            
+        Returns:
+            格式化后的答案文本
+        """
+        if not documents:
+            return "未找到相关文档。"
+        
+        # 统计查询
+        if subtype == "stats":
+            answer = f"找到 {len(documents)} 个相关文档：\n\n"
+        else:
+            answer = f"找到以下 {len(documents)} 个相关文档：\n\n"
+        
+        # 按相似度分组（高/中/低）
+        high_relevance = [d for d in documents if d.get("similarity", 0) >= 0.5]
+        medium_relevance = [d for d in documents if 0.3 <= d.get("similarity", 0) < 0.5]
+        low_relevance = [d for d in documents if d.get("similarity", 0) < 0.3]
+        
+        # 格式化文档列表
+        doc_index = 1
+        if high_relevance:
+            answer += "**高相关性文档：**\n"
+            for doc in high_relevance:
+                similarity = doc.get("similarity", 0)
+                similarity_str = f"（相关性: {similarity:.1%}）" if similarity > 0 else ""
+                answer += f"{doc_index}. {doc['title']}{similarity_str}\n"
+                doc_index += 1
+            answer += "\n"
+        
+        if medium_relevance:
+            answer += "**中等相关性文档：**\n"
+            for doc in medium_relevance:
+                similarity = doc.get("similarity", 0)
+                similarity_str = f"（相关性: {similarity:.1%}）" if similarity > 0 else ""
+                answer += f"{doc_index}. {doc['title']}{similarity_str}\n"
+                doc_index += 1
+            answer += "\n"
+        
+        if low_relevance:
+            answer += "**其他相关文档：**\n"
+            for doc in low_relevance:
+                similarity = doc.get("similarity", 0)
+                similarity_str = f"（相关性: {similarity:.1%}）" if similarity > 0 else ""
+                answer += f"{doc_index}. {doc['title']}{similarity_str}\n"
+                doc_index += 1
+        
+        # 添加提示
+        answer += "\n💡 提示：点击文档标题可以查看完整内容。"
+        
+        return answer
     
     def _extract_relevant_chunk(self, content: str, question: str, keywords: List[str], chunk_size: int = 4000) -> str:
         """

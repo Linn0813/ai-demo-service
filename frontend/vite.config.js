@@ -18,8 +18,8 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         ws: true,
-        // 配置超时和重试
-        timeout: 30000,
+        // 配置超时和重试（知识库操作可能需要较长时间）
+        timeout: 120000, // 120秒超时
         // 可选：重写路径，如果后端不需要 /api 前缀
         // rewrite: (path) => path.replace(/^\/api/, '')
         configure: (proxy, options) => {

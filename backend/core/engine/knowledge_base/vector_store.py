@@ -223,3 +223,50 @@ class VectorStore:
             log.error(f"清空向量存储失败: {e}")
             raise
 
+    def get_documents_by_space(self, space_id: str) -> Dict[str, Dict[str, Any]]:
+        """
+        获取指定知识库空间的所有文档信息（用于增量同步）。
+        
+        Args:
+            space_id: 知识库空间ID
+            
+        Returns:
+            文档字典，key为document_token，value为文档元数据（包含update_time）
+        """
+        try:
+            # 查询指定space_id的所有文档
+            results = self._collection.get(
+                where={"space_id": space_id}
+            )
+            
+            # 构建文档字典：key为document_token，value为元数据
+            documents = {}
+            ids = results.get("ids", [])
+            metadatas = results.get("metadatas", [])
+            
+            for doc_id, metadata in zip(ids, metadatas):
+                # 从chunk_id中提取document_token（格式：{token}_chunk_{idx}）
+                if "_chunk_" in doc_id:
+                    document_token = doc_id.split("_chunk_")[0]
+                else:
+                    document_token = doc_id
+                
+                # 如果该文档已存在，保留最早的update_time（因为可能有多个chunk）
+                if document_token not in documents:
+                    documents[document_token] = {
+                        "update_time": metadata.get("update_time"),
+                        "document_id": metadata.get("document_id"),
+                        "title": metadata.get("title"),
+                    }
+                else:
+                    # 如果有多个chunk，保留最早的update_time
+                    existing_time = documents[document_token].get("update_time")
+                    new_time = metadata.get("update_time")
+                    if existing_time and new_time and new_time < existing_time:
+                        documents[document_token]["update_time"] = new_time
+            
+            return documents
+        except Exception as e:
+            log.error(f"获取知识库文档信息失败: {e}")
+            return {}
+

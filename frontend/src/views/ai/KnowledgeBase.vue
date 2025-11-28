@@ -261,8 +261,21 @@
 
           <!-- 答案展示 -->
           <div v-if="currentAnswer" class="answer-section">
-            <h3>答案</h3>
+            <h3>{{ currentAnswer.question_type === 'document_list' ? '相关文档列表' : '答案' }}</h3>
             <div class="answer-content" v-html="formatAnswer(currentAnswer.answer)"></div>
+            
+            <!-- 文档列表模式提示 -->
+            <div v-if="currentAnswer.question_type === 'document_list' && currentAnswer.sources && currentAnswer.sources.length > 0" class="document-list-tip">
+              <el-alert
+                type="info"
+                :closable="false"
+                show-icon
+              >
+                <template #title>
+                  <span>找到 {{ currentAnswer.sources.length }} 个相关文档，点击文档标题可查看完整内容</span>
+                </template>
+              </el-alert>
+            </div>
 
             <!-- 网络搜索建议按钮 -->
             <div v-if="currentAnswer.suggest_web_search && !currentAnswer.has_web_search" class="web-search-suggestion">
@@ -295,10 +308,10 @@
               </el-tag>
             </div>
 
-            <!-- 引用来源 -->
+            <!-- 引用来源 / 文档列表 -->
             <div v-if="currentAnswer.sources && currentAnswer.sources.length > 0" class="sources-section">
-              <h4>引用来源</h4>
-              <ul class="sources-list">
+              <h4>{{ currentAnswer.question_type === 'document_list' ? '文档列表' : '引用来源' }}</h4>
+              <ul class="sources-list" :class="{ 'document-list-mode': currentAnswer.question_type === 'document_list' }">
                 <li v-for="(source, index) in currentAnswer.sources" :key="index" class="source-item">
                   <a
                     :href="source.url"
@@ -306,9 +319,11 @@
                     rel="noopener noreferrer"
                     class="source-link"
                   >
-                    {{ source.title }}
+                    {{ index + 1 }}. {{ source.title }}
                   </a>
-                  <span v-if="source.similarity > 0" class="similarity">相似度: {{ (source.similarity * 100).toFixed(1) }}%</span>
+                  <span v-if="source.similarity > 0" class="similarity">
+                    {{ currentAnswer.question_type === 'document_list' ? '相关性' : '相似度' }}: {{ (source.similarity * 100).toFixed(1) }}%
+                  </span>
                   <span v-else-if="source.source === 'web_search'" class="web-source">🌐 网络搜索</span>
                 </li>
               </ul>
@@ -419,20 +434,40 @@ const startAuthCheck = () => {
       const response = await aiApi.getWikiSpaces()
       if (response.data && response.data.code === 0) {
         const data = response.data.data
-        if (data.success && data.spaces) {
-          // 授权成功
+        if (data.success && data.spaces && data.spaces.length > 0) {
+          // 授权成功，有知识库数据
           stopAuthCheck()
           needsAuth.value = false
           oauthUrl.value = ''
           qrCodeUrl.value = ''
           ElMessage.success('授权成功！')
           // 重新加载知识库列表
-          loadWikiSpaces()
+          await loadWikiSpaces()
+        } else if (data.success && (!data.spaces || data.spaces.length === 0)) {
+          // 授权成功但列表为空，可能是没有知识库或权限不足
+          // 继续检查，但不清除授权状态
+          console.debug('授权成功但知识库列表为空，继续检查...')
+        }
+      } else {
+        // 检查是否是权限错误
+        const errorMsg = response.data?.message || response.data?.detail || '获取知识库列表失败'
+        const isAuthError = checkIfAuthError(errorMsg)
+        if (!isAuthError) {
+          // 不是权限错误，可能是其他错误，停止检查
+          stopAuthCheck()
         }
       }
     } catch (error) {
-      // 继续等待授权
-      console.debug('等待授权中...')
+      // 检查是否是权限错误
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '未知错误'
+      const isAuthError = checkIfAuthError(errorMsg) || error.response?.status === 403 || error.response?.status === 401
+      if (!isAuthError) {
+        // 不是权限错误，停止检查
+        stopAuthCheck()
+      } else {
+        // 继续等待授权
+        console.debug('等待授权中...')
+      }
     }
   }, 3000)
 }
@@ -539,14 +574,19 @@ const handleSync = async () => {
 const checkIfAuthError = (msg) => {
   if (!msg) return false
   const msgLower = msg.toLowerCase()
+  const msgStr = String(msg)
   return (
-    msg.includes('权限') ||
-    msg.includes('授权') ||
-    msg.includes('99991672') ||
+    msgStr.includes('权限') ||
+    msgStr.includes('授权') ||
+    msgStr.includes('99991672') ||
+    msgStr.includes('99991663') ||
+    msgStr.includes('99991664') ||
+    msgStr.includes('99991679') ||
     msgLower.includes('access denied') ||
     msgLower.includes('permission') ||
     msgLower.includes('unauthorized') ||
-    msgLower.includes('forbidden')
+    msgLower.includes('forbidden') ||
+    msgLower.includes('token') && (msgLower.includes('invalid') || msgLower.includes('expired') || msgLower.includes('missing'))
   )
 }
 
@@ -574,7 +614,13 @@ const handleAsk = async () => {
         sources: data.sources || [],
         suggest_web_search: data.suggest_web_search || false,
         has_web_search: data.has_web_search || false,
-        max_similarity: data.max_similarity || 0
+        max_similarity: data.max_similarity || 0,
+        question_type: data.question_type || 'content_qa' // 记录问题类型
+      }
+      
+      // 如果是文档列表查询，显示特殊提示
+      if (data.question_type === 'document_list') {
+        console.log('文档列表查询模式，找到', data.sources?.length || 0, '个文档')
       }
 
       // 根据答案判断使用的搜索模式
@@ -685,17 +731,21 @@ const loadWikiSpaces = async (retryCount = 0) => {
         // 检查是否是权限错误
         const errorMsg = data.message || '获取知识库列表失败'
         const isAuthError = checkIfAuthError(errorMsg)
+        console.log('检查权限错误:', { errorMsg, isAuthError }) // 调试日志
         if (isAuthError) {
           needsAuth.value = true // 自动显示授权卡片
+          console.log('检测到权限错误，设置 needsAuth = true') // 调试日志
         } else {
           ElMessage.warning(errorMsg)
         }
       }
     } else {
-      const errorMsg = response.data?.message || '获取知识库列表失败'
+      const errorMsg = response.data?.message || response.data?.detail || '获取知识库列表失败'
       const isAuthError = checkIfAuthError(errorMsg)
+      console.log('检查权限错误:', { errorMsg, isAuthError }) // 调试日志
       if (isAuthError) {
         needsAuth.value = true // 自动显示授权卡片
+        console.log('检测到权限错误，设置 needsAuth = true') // 调试日志
       } else {
         ElMessage.error(errorMsg)
       }
@@ -703,7 +753,19 @@ const loadWikiSpaces = async (retryCount = 0) => {
   } catch (error) {
     console.error('加载知识库列表失败:', error)
     const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '未知错误'
-    const isAuthError = checkIfAuthError(errorMsg) || error.response?.status === 403
+    const statusCode = error.response?.status
+    const isAuthError = checkIfAuthError(errorMsg) || statusCode === 403 || statusCode === 401
+    const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
+    
+    console.log('错误检测:', { errorMsg, statusCode, isAuthError, isTimeout }) // 调试日志
+    
+    // 如果是超时错误，提示用户后端仍在处理
+    if (isTimeout) {
+      ElMessage.warning('请求超时，后端可能仍在处理中。请稍后刷新页面或重试')
+      // 超时后不立即重试，让用户手动刷新
+      loadingSpaces.value = false
+      return
+    }
     
     // 如果是连接错误且重试次数少于3次，则重试
     if (!isAuthError && (error.code === 'ECONNRESET' || error.message?.includes('ECONNRESET')) && retryCount < 3) {
@@ -716,6 +778,7 @@ const loadWikiSpaces = async (retryCount = 0) => {
     
     if (isAuthError) {
       needsAuth.value = true // 自动显示授权卡片
+      console.log('检测到权限错误，设置 needsAuth = true') // 调试日志
     } else {
       ElMessage.error('加载知识库列表失败: ' + errorMsg)
     }
@@ -766,40 +829,91 @@ const formatAnswer = (text) => {
 }
 
 // 检查是否是OAuth回调
-onMounted(() => {
+onMounted(async () => {
   // 检查URL参数中是否有auth_success（OAuth回调成功）
   const authSuccess = route.query.auth_success
   if (authSuccess === 'true') {
-    // OAuth回调成功，显示成功消息
-    ElMessage.success('授权成功！现在可以使用知识库功能了')
+    // OAuth回调成功，先停止授权检查定时器
+    stopAuthCheck()
+    // 显示成功消息
+    ElMessage.success('授权成功！正在加载知识库...')
     needsAuth.value = false // 授权成功，清除授权状态
+    oauthUrl.value = ''
+    qrCodeUrl.value = ''
     // 清除URL中的auth_success参数
     window.history.replaceState({}, '', window.location.pathname)
-    // 重新加载知识库列表
-    loadWikiSpaces()
+    // 等待一小段时间，确保token已保存
+    await new Promise(resolve => setTimeout(resolve, 500))
+    // 重新加载知识库列表（带重试）
+    let retryCount = 0
+    const maxRetries = 3
+    while (retryCount < maxRetries) {
+      try {
+        await loadWikiSpaces()
+        // 如果加载成功，检查是否真的成功
+        if (!needsAuth.value) {
+          if (wikiSpaces.value.length > 0) {
+            ElMessage.success('知识库加载成功！')
+          } else {
+            ElMessage.success('授权成功！知识库列表为空，可能是没有可访问的知识库')
+          }
+          break
+        } else {
+          // 如果仍然需要授权，可能是token还没生效，重试
+          retryCount++
+          if (retryCount < maxRetries) {
+            console.log(`授权后加载失败，${1000 * retryCount}ms后重试... (${retryCount}/${maxRetries})`)
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount))
+          } else {
+            ElMessage.warning('授权成功，但加载知识库失败，请刷新页面重试')
+            needsAuth.value = true
+          }
+        }
+      } catch (error) {
+        retryCount++
+        console.error(`加载知识库失败 (${retryCount}/${maxRetries}):`, error)
+        const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message || '未知错误'
+        const isAuthError = checkIfAuthError(errorMsg) || error.response?.status === 403 || error.response?.status === 401
+        if (isAuthError && retryCount < maxRetries) {
+          // 权限错误，可能是token还没生效，重试
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount))
+        } else if (retryCount >= maxRetries) {
+          if (isAuthError) {
+            ElMessage.warning('授权成功，但加载知识库时仍提示权限不足，请刷新页面重试')
+            needsAuth.value = true
+          } else {
+            ElMessage.error('加载知识库失败，请刷新页面重试')
+          }
+        }
+      }
+    }
+    return
   }
   
   // 检查URL参数中是否有code（直接OAuth回调，虽然通常不会发生，但保留兼容性）
   const code = route.query.code
   if (code) {
     // OAuth回调，显示成功消息
-    ElMessage.success('授权成功！现在可以使用知识库功能了')
+    ElMessage.success('授权成功！正在加载知识库...')
     needsAuth.value = false // 授权成功，清除授权状态
     // 清除URL中的code参数
     window.history.replaceState({}, '', window.location.pathname)
+    // 等待一小段时间，确保token已保存
+    await new Promise(resolve => setTimeout(resolve, 500))
     // 重新加载知识库列表
-    loadWikiSpaces()
+    await loadWikiSpaces()
+    return
   }
   
   // 检查向量存储状态，确定搜索模式
   checkVectorStoreStatus()
   
   // 加载知识库空间列表（会自动检测授权状态）
-  loadWikiSpaces()
+  await loadWikiSpaces()
   
-  // 如果需要授权，自动生成二维码
+  // 等待加载完成后，如果需要授权，自动生成二维码
   if (needsAuth.value) {
-    initQRCode()
+    await initQRCode()
   }
 })
 
@@ -1153,6 +1267,20 @@ onBeforeUnmount(() => {
 .similarity {
   color: #909399;
   font-size: 12px;
+}
+
+.document-list-mode .source-item {
+  padding: 12px 0;
+}
+
+.document-list-mode .source-link {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.document-list-tip {
+  margin-top: 15px;
+  margin-bottom: 10px;
 }
 
 .history-section {

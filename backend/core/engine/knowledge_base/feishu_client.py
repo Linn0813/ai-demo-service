@@ -572,8 +572,8 @@ class FeishuAPIClient:
                 error_code = result.get("code")
                 error_msg = result.get("msg", "未知错误")
                 
-                # 对于预期的权限错误（404, 99991679等），降级为DEBUG日志
-                if error_code in (404, 99991679, 99991664):
+                # 对于预期的权限错误（404, 99991672, 99991663, 99991664, 99991679等），降级为DEBUG日志
+                if error_code in (404, 99991672, 99991663, 99991664, 99991679):
                     log.debug(f"飞书API返回业务错误（权限限制）: {error_msg} (code: {error_code})")
                 else:
                     # 其他错误才记录ERROR
@@ -581,13 +581,28 @@ class FeishuAPIClient:
                     log.debug(f"完整错误响应: {result}")
                 
                 # 常见错误码处理
-                if error_code == 99991663:
+                if error_code == 99991672:
+                    # 权限不足错误，抛出异常以便前端识别
                     raise RuntimeError(
-                        f"权限错误: {error_msg} (code: {error_code})\n"
-                        f"提示：如果权限类型是'用户身份'，需要使用user_access_token而不是tenant_access_token"
+                        f"权限不足: {error_msg} (code: {error_code})。"
+                        "请先进行飞书授权或申请应用身份权限。"
+                    )
+                elif error_code == 99991663:
+                    raise RuntimeError(
+                        f"权限错误: {error_msg} (code: {error_code})。"
+                        "提示：如果权限类型是'用户身份'，需要使用user_access_token而不是tenant_access_token。"
+                        "请先进行飞书授权或申请应用身份权限。"
                     )
                 elif error_code == 99991664:
-                    raise RuntimeError(f"资源不存在或无权访问: {error_msg} (code: {error_code})")
+                    raise RuntimeError(
+                        f"权限不足: 资源不存在或无权访问: {error_msg} (code: {error_code})。"
+                        "请先进行飞书授权或申请应用身份权限。"
+                    )
+                elif error_code == 99991679:
+                    raise RuntimeError(
+                        f"权限不足: {error_msg} (code: {error_code})。"
+                        "请先进行飞书授权或申请应用身份权限。"
+                    )
                 elif error_code == 1254000:
                     raise RuntimeError(
                         f"请求参数错误: {error_msg} (code: {error_code})\n"
@@ -600,23 +615,48 @@ class FeishuAPIClient:
             # HTTP错误（如400, 401, 403等）
             error_msg = f"飞书API HTTP错误: {method} {endpoint}, 状态码: {e.response.status_code}"
             
-            # 检查是否是频率限制错误（400状态码 + 99991400错误码）
+            # 检查是否是频率限制错误或权限错误（400状态码）
             if e.response.status_code == 400:
                 try:
                     error_body = e.response.json()
                     error_code = error_body.get("code")
+                    error_msg_detail = error_body.get("msg", "未知错误")
+                    
                     if error_code == 99991400:
                         # 频率限制错误，抛出特殊异常以便重试机制处理
                         raise RuntimeError(
-                            f"飞书API频率限制: {error_body.get('msg', 'request trigger frequency limit')} "
+                            f"飞书API频率限制: {error_msg_detail} "
                             f"(code: {error_code})"
                         ) from e
-                    elif error_code in (404, 99991679, 99991664):
-                        # 权限或404错误，静默处理（不输出ERROR日志）
-                        log.debug(f"飞书API HTTP错误（权限限制）: {method} {endpoint}, 状态码: {e.response.status_code}")
+                    elif error_code in (99991672, 99991663, 99991664, 99991679):
+                        # 权限错误，抛出RuntimeError，包含权限错误码和"权限"关键词，以便前端识别
+                        log.debug(f"飞书API HTTP错误（权限限制）: {method} {endpoint}, 状态码: {e.response.status_code}, 错误码: {error_code}")
+                        raise RuntimeError(
+                            f"权限不足: {error_msg_detail} (code: {error_code})。"
+                            "请先进行飞书授权或申请应用身份权限。"
+                        ) from e
+                    elif error_code == 404:
+                        # 404错误，静默处理
+                        log.debug(f"飞书API HTTP错误（404）: {method} {endpoint}, 状态码: {e.response.status_code}")
                         raise ConnectionError(error_msg) from e
                 except (ValueError, KeyError):
                     pass
+            
+            # 对于401和403状态码，也认为是权限错误
+            if e.response.status_code in (401, 403):
+                try:
+                    error_body = e.response.json()
+                    error_code = error_body.get("code", e.response.status_code)
+                    error_msg_detail = error_body.get("msg", "权限不足")
+                    raise RuntimeError(
+                        f"权限不足: {error_msg_detail} (code: {error_code}, HTTP状态码: {e.response.status_code})。"
+                        "请先进行飞书授权或申请应用身份权限。"
+                    ) from e
+                except (ValueError, KeyError):
+                    raise RuntimeError(
+                        f"权限不足: HTTP状态码 {e.response.status_code}。"
+                        "请先进行飞书授权或申请应用身份权限。"
+                    ) from e
             
             # 对于404和权限相关错误，降级为DEBUG日志
             if e.response.status_code in (404, 400):
@@ -626,10 +666,10 @@ class FeishuAPIClient:
             
             try:
                 error_body = e.response.json()
-                if e.response.status_code not in (404, 400):
+                if e.response.status_code not in (404, 400, 401, 403):
                     log.error(f"错误详情: {error_body}")
             except ValueError:
-                if e.response.status_code not in (404, 400):
+                if e.response.status_code not in (404, 400, 401, 403):
                     log.error(f"错误响应（非JSON）: {e.response.text[:500]}")
             
             raise ConnectionError(error_msg) from e

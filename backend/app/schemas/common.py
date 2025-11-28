@@ -64,6 +64,7 @@ class RematchModuleResponse(BaseModel):
 
 class SyncDocumentsRequest(BaseModel):
     space_id: Optional[str] = Field(None, description="知识库空间ID，如果不提供则同步所有空间")
+    incremental: bool = Field(True, description="是否使用增量同步（默认True，只同步新增或更新的文档）")
 
 
 class SyncDocumentsResponse(BaseModel):
@@ -71,6 +72,10 @@ class SyncDocumentsResponse(BaseModel):
     message: str = ""
     document_count: int = 0
     indexed_count: int = 0
+    new_count: int = 0  # 新增文档数
+    updated_count: int = 0  # 更新文档数
+    skipped_count: int = 0  # 跳过文档数（未更新）
+    deleted_count: int = 0  # 删除文档数
     total_spaces: Optional[int] = None
     success_count: Optional[int] = None
     failed_count: Optional[int] = None

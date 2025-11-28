@@ -75,14 +75,28 @@ class FeishuDocumentLoader:
                         "请先进行飞书授权或申请应用身份权限。"
                     )
                 elif error_code == 99991664:
-                    log.error("知识空间不存在或无权访问")
+                    # 权限错误，抛出异常以便前端检测
+                    raise RuntimeError(
+                        f"权限不足: 知识空间不存在或无权访问 (code: {error_code})。"
+                        "请先进行飞书授权或申请应用身份权限。"
+                    )
                 elif "404" in str(error_code) or "not found" in error_msg.lower():
                     log.error("API端点可能不正确，请检查飞书API文档")
-                
-                return []
+                    return []
+                else:
+                    # 其他错误也抛出异常，让上层处理
+                    raise RuntimeError(f"获取知识空间列表失败: {error_msg} (code: {error_code})")
+        except RuntimeError:
+            # 重新抛出RuntimeError（包括权限错误），让上层处理
+            raise
         except Exception as e:
+            error_str = str(e)
+            # 检查是否是权限相关的错误
+            if "99991672" in error_str or "99991663" in error_str or "99991664" in error_str or "权限" in error_str:
+                # 权限错误，重新抛出
+                raise RuntimeError(f"权限不足: {error_str}。请先进行飞书授权或申请应用身份权限。") from e
             log.error(f"加载知识库空间失败: {e}")
-            return []
+            raise RuntimeError(f"加载知识库空间失败: {error_str}") from e
 
     def load_document_content(self, document_token: str, is_wiki_node: bool = True) -> Optional[str]:
         """

@@ -11,7 +11,8 @@ const baseUrl = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? '' :
 
 // 创建专用实例
 const aiRequest = axios.create({
-  baseURL: baseUrl
+  baseURL: baseUrl,
+  timeout: 60000, // 60秒超时，知识库操作可能需要较长时间
 })
 
 // 请求拦截器（独立服务不需要token认证，但保留结构以便后续扩展）
@@ -25,6 +26,10 @@ aiRequest.interceptors.response.use(
   response => response,
   error => {
     console.error('AI API Error:', error.response?.status, error.response?.data)
+    // 如果是超时错误，提供更友好的提示
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      error.message = '请求超时，后端仍在处理中，请稍后刷新页面查看结果'
+    }
     return Promise.reject(error)
   }
 )
