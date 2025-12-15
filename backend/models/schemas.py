@@ -23,10 +23,12 @@ class GenerateTestCasesRequest(RequirementDocPayload):
     limit: Optional[int] = Field(None, ge=1, le=50, description="限制功能点数量")
     max_workers: int = Field(4, ge=1, le=8, description="并发线程数")
     confirmed_function_points: Optional[List[Dict[str, Any]]] = None
+    enable_understanding: bool = Field(True, description="是否启用文档理解（默认启用）")
+    document_understanding: Optional[Dict[str, Any]] = Field(None, description="理解结果（可选，如果前端已缓存）")
 
 
 class ExtractModulesRequest(RequirementDocPayload):
-    pass
+    enable_understanding: bool = Field(True, description="是否启用文档理解（默认启用）")
 
 
 class FunctionModule(BaseModel):
@@ -42,11 +44,13 @@ class GenerateTestCasesResponse(BaseModel):
     test_cases: List[Dict[str, Any]]
     by_function_point: Dict[str, Any]
     meta: Dict[str, Any]
+    document_understanding: Optional[Dict[str, Any]] = Field(None, description="文档理解结果（可选）")
 
 
 class ExtractModulesResponse(BaseModel):
     function_points: List[FunctionModule]
     requirement_doc: str
+    document_understanding: Optional[Dict[str, Any]] = Field(None, description="文档理解结果（可选）")
 
 
 class TaskSubmitResponse(BaseModel):
@@ -162,3 +166,38 @@ class WordUploadResponse(BaseModel):
     total_paragraphs: int = Field(..., description="段落总数")
     total_headings: int = Field(..., description="标题数量")
     structure: Optional[Dict[str, Any]] = Field(None, description="文档结构信息（包含标题列表）")
+
+
+# ==================== 文档理解相关Schema ====================
+
+class DocumentStructure(BaseModel):
+    """文档结构信息"""
+    has_sections: bool
+    section_count: int
+    hierarchy_levels: List[int] = Field(default_factory=list, description="层级列表，如 [1, 2, 3] 表示有3级标题")
+    main_sections: List[str] = Field(default_factory=list, description="主要章节列表（层级为1的章节）")
+    section_tree: Dict[str, Any] = Field(default_factory=dict, description="章节树结构（树形表示）")
+
+
+class DocumentUnderstanding(BaseModel):
+    """文档理解结果"""
+    document_type: str = Field(..., description="文档类型（PRD、需求文档、设计文档、用户故事等）")
+    main_topic: str = Field(..., description="核心主题")
+    business_goals: List[str] = Field(default_factory=list, description="业务目标列表")
+    structure: DocumentStructure = Field(..., description="文档结构信息")
+    key_concepts: List[str] = Field(default_factory=list, description="关键业务概念列表")
+    key_terms: List[str] = Field(default_factory=list, description="关键术语列表")
+    business_rules: List[str] = Field(default_factory=list, description="业务规则列表")
+    completeness: str = Field("未知", description="完整性（完整/不完整）")
+    clarity: str = Field("未知", description="清晰度（清晰/模糊）")
+    quality_score: float = Field(0.5, ge=0, le=1, description="质量评分（0-1）")
+    total_sections: int = Field(0, description="章节总数")
+    total_lines: int = Field(0, description="文档总行数")
+    estimated_complexity: str = Field("中等", description="复杂度评估（简单/中等/复杂）")
+    prompt_version: str = Field("v1.0.0", description="Prompt版本")
+    model_version: str = Field("", description="模型版本")
+    generated_at: Optional[str] = Field(None, description="生成时间")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典（用于API响应）"""
+        return self.model_dump()

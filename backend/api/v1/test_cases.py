@@ -43,6 +43,8 @@ def generate_test_cases(payload: GenerateTestCasesRequest) -> GenerateTestCasesR
             model_name=payload.model_name,
             confirmed_function_points=payload.confirmed_function_points,
             trace_id=payload.task_id,
+            enable_understanding=payload.enable_understanding,
+            document_understanding=payload.document_understanding,
         )
         return GenerateTestCasesResponse(**result)
     except Exception as exc:  # noqa: BLE001
@@ -70,6 +72,8 @@ def generate_test_cases_async(payload: GenerateTestCasesRequest) -> TaskSubmitRe
                 model_name=payload.model_name,
                 confirmed_function_points=payload.confirmed_function_points,
                 trace_id=payload.task_id,
+                enable_understanding=payload.enable_understanding,
+                document_understanding=payload.document_understanding,
             )
             return result
         

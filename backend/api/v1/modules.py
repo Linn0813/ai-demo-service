@@ -38,14 +38,18 @@ def extract_function_modules(payload: ExtractModulesRequest) -> ExtractModulesRe
     """
     try:
         service = _build_service(payload)
-        modules = service.extract_function_modules_with_content(
+        modules, understanding = service.extract_function_modules_with_content(
             payload.requirement_doc,
-            trace_id=payload.task_id
+            trace_id=payload.task_id,
+            enable_understanding=payload.enable_understanding
         )
-        return ExtractModulesResponse(
+        response = ExtractModulesResponse(
             function_points=modules,
             requirement_doc=payload.requirement_doc
         )
+        if understanding:
+            response.document_understanding = understanding.to_dict()
+        return response
     except Exception as exc:  # noqa: BLE001
         log.exception("提取功能模块失败")
         raise HTTPException(status_code=500, detail=f"提取功能模块失败: {exc}") from exc
@@ -62,22 +66,56 @@ def extract_function_modules_async(payload: ExtractModulesRequest) -> TaskSubmit
         task_manager = get_task_manager()
         service = _build_service(payload)
         
-        # 创建任务函数
+        # 先提交任务，获取task_id
+        task_id = task_manager.submit_task(
+            lambda: None,  # 临时函数，稍后会被替换
+            task_type="extract_function_modules"
+        )
+        
+        # 创建任务函数（带进度回调）
         def task_func():
-            modules = service.extract_function_modules_with_content(
+            task_manager_instance = get_task_manager()
+            
+            def progress_callback(progress_data):
+                """进度回调，更新任务进度"""
+                # 使用实际的task_id
+                task_manager_instance.update_progress(task_id, progress_data)
+                # 如果是思考过程，也更新部分结果
+                if progress_data.get("type") == "thinking":
+                    task_manager_instance.update_partial_result(task_id, {
+                        "type": "thinking",
+                        "thinking_steps": progress_data
+                    })
+            
+            # 设置进度回调到服务实例（临时方案）
+            service._current_progress_callback = progress_callback
+            
+            modules, understanding = service.extract_function_modules_with_content(
                 payload.requirement_doc,
-                trace_id=payload.task_id
+                trace_id=task_id,  # 使用实际的task_id
+                enable_understanding=payload.enable_understanding
             )
-            return {
+            
+            # 清除临时回调
+            if hasattr(service, '_current_progress_callback'):
+                delattr(service, '_current_progress_callback')
+            
+            result = {
                 "function_points": modules,
                 "requirement_doc": payload.requirement_doc
             }
+            if understanding:
+                result["document_understanding"] = understanding.to_dict()
+            return result
         
-        # 提交任务
-        task_id = task_manager.submit_task(
-            task_func,
-            task_type="extract_function_modules"
-        )
+        # 替换任务函数
+        with task_manager._lock:
+            task_info = task_manager._tasks.get(task_id)
+            if task_info:
+                # 重新提交实际的任务函数
+                from concurrent.futures import ThreadPoolExecutor
+                future = task_manager._executor.submit(task_manager._execute_task, task_id, task_func)
+                task_info["future"] = future
         
         return TaskSubmitResponse(
             task_id=task_id,

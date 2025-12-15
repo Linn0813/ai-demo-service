@@ -1,6 +1,10 @@
 """LLM提示词构建工具"""
 from __future__ import annotations
 
+from typing import Any, Dict, List, Optional
+
+from models.schemas import DocumentUnderstanding
+
 
 def build_generation_prompt(requirement_doc: str) -> str:
     """构建测试用例生成的提示词。"""
@@ -32,7 +36,7 @@ def build_generation_prompt(requirement_doc: str) -> str:
    - 确保每个业务规则都有至少1个测试用例
 
 3. **边界条件测试（必须覆盖）**
-   - 数值边界：最少、最多、临界值（如：1天、6天、45天、15次）
+   - 数值边界：最少、最多、临界值
    - 时间边界：边界时间点、时间范围
    - 数据量边界：数据不足、数据充足、临界数据量
    - 字符边界：最小长度、最大长度、特殊字符
@@ -55,12 +59,12 @@ def build_generation_prompt(requirement_doc: str) -> str:
 在生成测试用例时，必须应用以下测试设计方法：
 
 1. **等价类划分**
-   - 有效等价类：存在有效数据、有工作日数据、有休息日数据
-   - 无效等价类：无有效数据、无工作日数据、无休息日数据
+   - 有效等价类：存在有效数据、满足条件的数据
+   - 无效等价类：无有效数据、不满足条件的数据
    - 为每个等价类生成至少1个测试用例
 
 2. **边界值分析**
-   - 必须测试所有边界值：最少（1天）、最多（6天）、临界值（45天、15次）
+   - 必须测试所有边界值：最少、最多、临界值
    - 必须测试边界值两侧：边界值-1、边界值、边界值+1
    - 为每个边界值生成至少1个测试用例
 
@@ -70,7 +74,7 @@ def build_generation_prompt(requirement_doc: str) -> str:
    - 为每个场景生成完整的测试用例（包含前置条件、步骤、预期结果）
 
 4. **决策表**
-   - 多条件组合：存在数据+工作日+休息日
+   - 多条件组合：多个条件的组合情况
    - 为每个条件组合生成测试用例
 
 【预期结果要求 - 严格规定】
@@ -186,10 +190,10 @@ def build_module_extraction_prompt(requirement_doc: str) -> str:
 2. **禁止使用泛化的模块名称**（如"主要功能模块"、"核心模块"、"通用模块"等），必须使用文档中明确提到的具体模块名称
 3. 如果文档中明确提到了多个独立的模块（即使它们有相似的命名模式），也必须作为独立的模块分别提取，不要合并
 4. 仔细扫描文档，找出所有明确命名的模块（如果文档中提到了多个具有相似命名模式的模块，每个都应该作为独立模块提取，不要合并）
-5. **禁止拆分模块内部的题目、字段或选项**，例如"血压测量结果""血压测量操作流程"都属于"血压洞察NPS"，不要单独输出
-6. **禁止将状态、条件、场景识别为独立模块**，例如"存在有效数据"、"无有效数据"、"存在数据"、"无工作日数据"等都是状态或条件，应该归属于"状态判断条件"或"判断条件"等模块，不要单独提取
+5. **禁止拆分模块内部的题目、字段或选项**，例如如果文档中提到"XX测量结果"和"XX测量操作流程"都属于"XX模块"，不要单独输出
+6. **禁止将状态、条件、场景识别为独立模块**，例如"存在有效数据"、"无有效数据"等都是状态或条件，应该归属于"状态判断条件"或"判断条件"等模块，不要单独提取
 7. **重要：独立的功能单元应该作为独立模块提取**
-   - 如果文档中有独立的章节标题（如"详情信息半弹窗"、"工作日和非工作日设置"、"详情说明半弹窗"、"算法规则定义"等），即使它们属于某个更大的功能模块，也应该作为独立的模块提取
+   - 如果文档中有独立的章节标题（如"详情信息半弹窗"、"设置页面"等），即使它们属于某个更大的功能模块，也应该作为独立的模块提取
    - 只有当某个功能明确是另一个模块的子功能（如"提交按钮"、"确认弹窗"等）时，才应该归入主模块
    - 如果文档中某个功能有独立的章节标题和详细描述，应该作为独立模块提取
    - **特殊情况**：如果文档非常简单，只有一个主要功能且没有独立的子章节标题，则只提取这一个模块即可
@@ -197,7 +201,7 @@ def build_module_extraction_prompt(requirement_doc: str) -> str:
 9. **重要**：仔细检查文档的每个章节，确保提取了文档中明确提到的所有具体功能模块，不要遗漏，也不要使用泛化的名称
    - 如果文档只有一个模块，就只提取一个模块
    - 如果文档有多个模块，就提取所有模块
-10. **特别注意**：优先提取文档中的章节标题（如"5.2 社交时差"、"详情信息半弹窗"、"工作日和非工作日设置"、"详情说明半弹窗"、"算法规则定义"等），这些通常是主要功能模块，应该作为独立模块提取
+10. **特别注意**：优先提取文档中的章节标题，这些通常是主要功能模块，应该作为独立模块提取
 
 **重要要求：**
 - **严格禁止臆造模块**：所有模块名称必须直接来自需求文档中明确提到的名称，不能自行创造或概括
@@ -215,7 +219,7 @@ def build_module_extraction_prompt(requirement_doc: str) -> str:
 - section_hint：简短的章节名称或上下文线索（可选）
 
 **质量校验：**
-- 请优先提取文档章节或标题中的模块（例如“全局NPS”“生理期NPS”“AI Partner”），确保这些模块全部出现
+- 请优先提取文档章节或标题中的模块，确保这些模块全部出现
 - 如果一个名称在文档中多次出现，只输出一次模块
 - 每个模块的 `exact_phrases` 和 `keywords` 必须源自原文对应段落，用于帮助定位原文
 
@@ -225,8 +229,8 @@ def build_module_extraction_prompt(requirement_doc: str) -> str:
 - 确保JSON格式完全正确
 
 **模块层次关系识别：**
-- 如果模块是文档中的主要功能模块（通常是独立的章节标题，如"社交时差"、"睡眠类型"），设置 `is_main_module` 为 `true`
-- 如果模块是某个主模块的子功能（如"详情信息半弹窗"、"工作日和非工作日设置"），设置 `is_main_module` 为 `false`，并在 `parent_module` 中指定父模块名称
+- 如果模块是文档中的主要功能模块（通常是独立的章节标题），设置 `is_main_module` 为 `true`
+- 如果模块是某个主模块的子功能（如"详情信息半弹窗"、"设置页面"等），设置 `is_main_module` 为 `false`，并在 `parent_module` 中指定父模块名称
 - 如果无法确定层次关系，可以设置 `is_main_module` 为 `null`，让系统自动判断
 
 **输出格式要求：**
@@ -309,3 +313,102 @@ def build_function_point_extraction_prompt(module_name: str, module_content: str
 4. **禁止输出任何非JSON内容**
 
 **现在开始输出JSON（只输出JSON，不要其他内容）：**"""
+
+
+def build_document_understanding_prompt(requirement_doc: str) -> str:
+    """构建文档理解的提示词"""
+    return f"""你是一位需求分析专家。请仔细阅读以下需求文档，并理解其整体结构和业务意图。
+
+**任务要求：**
+1. 识别文档类型（PRD、需求文档、设计文档、用户故事等）
+2. 提取文档的核心主题和业务目标
+3. 识别文档的结构（章节、层级、标题）
+4. 提取关键业务概念和术语
+5. 分析文档的完整性和清晰度
+6. 评估文档的复杂度
+
+**需求文档：**
+{requirement_doc}
+
+**输出格式：**
+{{
+  "document_type": "文档类型",
+  "main_topic": "核心主题",
+  "business_goals": ["业务目标1", "业务目标2"],
+  "key_concepts": ["概念1", "概念2"],
+  "key_terms": ["术语1", "术语2"],
+  "business_rules": ["规则1", "规则2"],
+  "completeness": "完整/不完整",
+  "clarity": "清晰/模糊",
+  "quality_score": 0.0-1.0,
+  "estimated_complexity": "简单/中等/复杂"
+}}
+
+**⚠️ 只输出JSON，不要包含任何其他内容**"""
+
+
+def build_module_extraction_prompt_with_understanding(
+    requirement_doc: str,
+    understanding: DocumentUnderstanding
+) -> str:
+    """基于理解结果构建功能模块提取提示词"""
+    # 构建理解结果摘要
+    understanding_summary = f"""
+**文档理解结果（用于辅助提取）：**
+- 文档类型：{understanding.document_type}
+- 核心主题：{understanding.main_topic}
+- 业务目标：{', '.join(understanding.business_goals[:5]) if understanding.business_goals else '无'}
+- 关键概念：{', '.join(understanding.key_concepts[:5]) if understanding.key_concepts else '无'}
+- 文档结构：{understanding.structure.section_count}个章节，层级：{understanding.structure.hierarchy_levels}
+- 主要章节：{', '.join(understanding.structure.main_sections[:5]) if understanding.structure.main_sections else '无'}
+"""
+
+    # 在原有提示词基础上增加理解结果信息
+    base_prompt = build_module_extraction_prompt(requirement_doc)
+    
+    # 在需求文档之前插入理解结果摘要
+    doc_marker = "需求文档："
+    if doc_marker in base_prompt:
+        parts = base_prompt.split(doc_marker, 1)
+        return parts[0] + understanding_summary + "\n" + doc_marker + parts[1]
+    
+    # 如果找不到标记，直接追加
+    return base_prompt.replace(
+        "需求文档：",
+        understanding_summary + "\n需求文档：",
+        1
+    )
+
+
+def build_generation_prompt_with_understanding(
+    requirement_doc: str,
+    understanding: DocumentUnderstanding,
+    confirmed_function_points: Optional[List[Dict[str, Any]]] = None
+) -> str:
+    """基于理解结果构建测试用例生成提示词"""
+    # 构建理解结果摘要
+    understanding_summary = f"""
+**文档理解结果（用于辅助生成）：**
+- 文档类型：{understanding.document_type}
+- 核心主题：{understanding.main_topic}
+- 业务目标：{', '.join(understanding.business_goals[:5]) if understanding.business_goals else '无'}
+- 关键概念：{', '.join(understanding.key_concepts[:5]) if understanding.key_concepts else '无'}
+- 业务规则：{', '.join(understanding.business_rules[:3]) if understanding.business_rules else '无'}
+- 文档复杂度：{understanding.estimated_complexity}
+"""
+
+    # 在原有提示词基础上增加理解结果信息
+    base_prompt = build_generation_prompt(requirement_doc)
+    
+    # 在需求文档之前插入理解结果摘要
+    doc_marker = "【需求文档】"
+    if doc_marker in base_prompt:
+        parts = base_prompt.split(doc_marker, 1)
+        return parts[0] + understanding_summary + "\n" + doc_marker + parts[1]
+    
+    # 如果找不到标记，直接追加
+    return base_prompt.replace(
+        "【需求文档】",
+        understanding_summary + "\n【需求文档】",
+        1
+    )

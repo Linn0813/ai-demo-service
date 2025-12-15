@@ -13,7 +13,8 @@ from domain.test_case.module_hierarchy import ModuleHierarchyDetector
 from domain.test_case.module_hierarchy_builder import ModuleHierarchyBuilder
 from domain.test_case.module_matcher import EXPECTED_MODULE_CANONICALS, ModuleMatcher
 from domain.test_case.module_validator import ModuleValidator
-from domain.test_case.prompts import build_module_extraction_prompt
+from domain.test_case.prompts import build_module_extraction_prompt, build_module_extraction_prompt_with_understanding
+from models.schemas import DocumentUnderstanding
 from domain.test_case.text_normalizer import RequirementCache
 from shared.logger import log
 
@@ -126,11 +127,26 @@ class FunctionModuleExtractor:
             snippet_lines, other_tokens, min_content_length
         )
 
-    def extract_function_modules(self, requirement_doc: str, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def extract_function_modules(
+        self,
+        requirement_doc: str,
+        run_id: Optional[str] = None,
+        understanding: Optional[DocumentUnderstanding] = None
+    ) -> List[Dict[str, Any]]:
         """调用LLM提取功能模块。"""
 
         self._cache.prepare(requirement_doc)
-        extract_prompt = build_module_extraction_prompt(requirement_doc)
+        
+        # 如果有理解结果，使用增强的提示词
+        if understanding and understanding.quality_score > 0.0:
+            extract_prompt = build_module_extraction_prompt_with_understanding(
+                requirement_doc,
+                understanding
+            )
+            log.debug("使用增强的模块提取提示词（基于理解结果）")
+        else:
+            extract_prompt = build_module_extraction_prompt(requirement_doc)
+            log.debug("使用标准模块提取提示词")
 
         try:
             response = self.llm_service.generate(extract_prompt)
@@ -218,11 +234,16 @@ class FunctionModuleExtractor:
             raise
 
 
-    def extract_function_modules_with_content(self, requirement_doc: str, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def extract_function_modules_with_content(
+        self,
+        requirement_doc: str,
+        run_id: Optional[str] = None,
+        understanding: Optional[DocumentUnderstanding] = None
+    ) -> List[Dict[str, Any]]:
         """提取功能模块并匹配原文内容。"""
 
         self._cache.prepare(requirement_doc)
-        modules = self.extract_function_modules(requirement_doc, run_id=run_id)
+        modules = self.extract_function_modules(requirement_doc, run_id=run_id, understanding=understanding)
         if not modules:
             log.warning("未能提取功能模块")
             return []

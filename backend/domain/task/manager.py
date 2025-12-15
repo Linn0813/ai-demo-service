@@ -164,7 +164,44 @@ class TaskManager:
             if not task_info:
                 return False
             
-            task_info["partial_result"] = partial_result
+            # 如果是思考过程，累积步骤到数组中
+            if partial_result.get("type") == "thinking" and "thinking_steps" in partial_result:
+                if "partial_result" not in task_info or task_info["partial_result"] is None:
+                    task_info["partial_result"] = {
+                        "type": "thinking",
+                        "thinking_steps_list": []
+                    }
+                elif task_info["partial_result"].get("type") != "thinking":
+                    task_info["partial_result"] = {
+                        "type": "thinking",
+                        "thinking_steps_list": []
+                    }
+                
+                # 获取步骤列表
+                steps_list = task_info["partial_result"].get("thinking_steps_list", [])
+                new_step = partial_result["thinking_steps"]
+                
+                # 检查是否已存在该步骤（根据step字段）
+                existing_index = next(
+                    (i for i, s in enumerate(steps_list) if s.get("step") == new_step.get("step")),
+                    -1
+                )
+                
+                if existing_index >= 0:
+                    # 更新现有步骤
+                    steps_list[existing_index] = new_step
+                else:
+                    # 添加新步骤
+                    steps_list.append(new_step)
+                
+                # 更新partial_result，包含所有步骤
+                task_info["partial_result"]["thinking_steps_list"] = steps_list
+                # 同时保留最新的单个步骤，用于兼容
+                task_info["partial_result"]["thinking_steps"] = new_step
+            else:
+                # 非思考过程，直接更新
+                task_info["partial_result"] = partial_result
+            
             log.debug(f"任务部分结果更新: {task_id}")
             return True
     
@@ -182,7 +219,7 @@ class TaskManager:
             task_info = self._tasks.get(task_id)
             if not task_info:
                 return None
-                
+            
             # 返回任务信息的副本（移除future对象）
             result = {
                 "task_id": task_info["task_id"],

@@ -25,9 +25,9 @@
           </el-button>
         </div>
 
-        <!-- 功能模块折叠卡片列表 -->
+          <!-- 功能模块折叠卡片列表 -->
         <div class="fp-cards-list">
-          <el-collapse v-model="expandedFpIds" accordion>
+          <el-collapse v-model="expandedFpIds" accordion @change="handleCollapseChange">
             <el-collapse-item
               v-for="fp in filteredFunctionPoints"
               :key="fp.id"
@@ -35,7 +35,7 @@
               class="fp-collapse-item"
             >
               <template #title>
-                <div class="fp-card-header">
+                <div class="fp-card-header" @click="handleSelectFp(fp.id)">
                   <div class="fp-card-info">
                     <el-icon class="fp-icon" :class="fp.parent_module ? 'fp-icon-sub' : 'fp-icon-main'">
                       <component :is="fp.parent_module ? Document : Folder" />
@@ -305,14 +305,32 @@ watch(() => props.functionPoints, (newVal) => {
   }
 }, { immediate: true })
 
-// 监听折叠面板展开，自动选中
+// 处理折叠面板变化
+const handleCollapseChange = (activeNames) => {
+  if (activeNames && activeNames.length > 0) {
+    const fpId = Array.isArray(activeNames) ? activeNames[0] : activeNames
+    handleSelectFp(fpId)
+  }
+}
+
+// 选中功能点
+const handleSelectFp = (fpId) => {
+  selectedFpId.value = fpId
+  // 初始化编辑内容
+  const fp = functionPointsList.value.find(f => f.id === fpId)
+  if (fp) {
+    editingContent.value = fp.matched_content || ''
+    originalEditingContent.value = editingContent.value
+    console.log('✅ 选中功能点:', fp.name, '原文内容长度:', editingContent.value.length)
+  }
+}
+
+// 监听折叠面板展开，自动选中（保留作为备用）
 watch(expandedFpIds, (newVal) => {
-  if (newVal.length > 0) {
-    selectedFpId.value = newVal[0]
-    // 初始化编辑内容
-    if (selectedFunctionPoint.value) {
-      editingContent.value = selectedFunctionPoint.value.matched_content || ''
-      originalEditingContent.value = editingContent.value
+  if (newVal && newVal.length > 0) {
+    const fpId = Array.isArray(newVal) ? newVal[0] : newVal
+    if (selectedFpId.value !== fpId) {
+      handleSelectFp(fpId)
     }
   }
 })

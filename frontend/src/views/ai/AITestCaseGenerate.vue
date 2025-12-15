@@ -23,10 +23,10 @@
     <div class="ai-generator-page">
       <!-- 配置区域（可折叠） -->
       <el-card shadow="hover" class="section-card config-card">
-        <template #header>
-          <div class="card-header">
-            <el-icon><Edit /></el-icon>
-            <span>生成配置</span>
+            <template #header>
+              <div class="card-header">
+                <el-icon><Edit /></el-icon>
+                <span>生成配置</span>
             <el-button 
               text 
               @click="configCollapsed = !configCollapsed"
@@ -36,8 +36,8 @@
                 <component :is="configCollapsed ? 'ArrowDown' : 'ArrowUp'" />
               </el-icon>
             </el-button>
-          </div>
-        </template>
+              </div>
+            </template>
         <div v-show="!configCollapsed">
 
             <el-form
@@ -136,6 +136,20 @@
                 </el-collapse-item>
               </el-collapse>
 
+              <el-form-item label="功能点确认">
+                <el-switch
+                  v-model="form.needConfirmFunctionPoints"
+                  active-text="需要确认功能点与原文"
+                  inactive-text="跳过确认，直接生成"
+                  :active-value="true"
+                  :inactive-value="false"
+                />
+                <div style="margin-top: 8px; font-size: 12px; color: var(--color-text-secondary);">
+                  <el-icon><InfoFilled /></el-icon>
+                  <span>开启后，提取功能模块后需要您确认和编辑功能点与原文匹配关系；关闭后将直接使用AI提取的结果生成测试用例</span>
+                </div>
+              </el-form-item>
+
               <el-form-item label="需求文档内容" class="requirement-item">
                 <div style="margin-bottom: 8px;">
                   <el-upload
@@ -167,37 +181,37 @@
               </el-form-item>
             </el-form>
         </div>
-      </el-card>
+          </el-card>
 
       <!-- 任务进度区域（实时更新） -->
-      <el-card
+          <el-card
         v-if="taskId || extractTaskId"
-        shadow="hover"
-        class="section-card progress-card"
-      >
-        <template #header>
-          <div class="card-header">
-            <el-icon><Loading /></el-icon>
+            shadow="hover"
+            class="section-card progress-card"
+          >
+            <template #header>
+              <div class="card-header">
+                <el-icon><Loading /></el-icon>
             <span>任务进度</span>
             <el-tag v-if="taskProgressInfo" type="info" size="small" style="margin-left: auto;">
               {{ taskProgressInfo.current || 0 }}/{{ taskProgressInfo.total || 0 }}
             </el-tag>
-          </div>
-        </template>
+              </div>
+            </template>
 
         <div class="task-progress-container">
           <!-- 总体进度条 -->
           <div class="overall-progress">
-            <el-progress
+              <el-progress
               :percentage="progressPercentage"
-              :status="progressStatus"
+                :status="progressStatus"
               :stroke-width="16"
-            />
+              />
             <div class="progress-info">
               <span class="status-text">{{ taskStatusLabel }}</span>
               <span class="progress-text">{{ progressText }}</span>
             </div>
-          </div>
+            </div>
 
           <!-- 执行阶段列表 -->
           <div class="stage-list" v-if="stages.length > 0">
@@ -205,7 +219,7 @@
               v-for="(stage, index) in stages"
               :key="index"
               :class="['stage-item', `stage-${stage.status}`]"
-            >
+                  >
               <el-icon class="stage-icon">
                 <component :is="getStageIcon(stage.status)" />
               </el-icon>
@@ -227,6 +241,58 @@
             <span>正在处理: <strong>{{ taskProgressInfo.current_item }}</strong></span>
           </div>
 
+          <!-- AI思考过程展示（类似对话界面） -->
+          <div class="thinking-process" v-if="thinkingSteps.length > 0 || (extractTaskId && taskStatus === 'running')">
+            <div class="thinking-header">
+              <el-icon><ChatLineRound /></el-icon>
+              <span>AI 思考过程</span>
+              <el-tag v-if="thinkingSteps.length > 0" type="info" size="small" style="margin-left: 8px;">
+                {{ thinkingSteps.length }} 个步骤
+              </el-tag>
+            </div>
+            <div v-if="thinkingSteps.length === 0" class="thinking-empty">
+              <el-icon><Loading /></el-icon>
+              <span>正在分析文档，思考过程将实时显示...</span>
+            </div>
+            <div class="thinking-messages">
+              <div
+                v-for="(step, index) in thinkingSteps"
+                :key="index"
+                :class="['thinking-message', `step-${step.step}`]"
+              >
+                <div class="thinking-avatar">
+                  <el-icon><Cpu /></el-icon>
+                </div>
+                <div class="thinking-content">
+                  <div class="thinking-title">{{ step.content }}</div>
+                  <div class="thinking-items">
+                    <div
+                      v-for="(item, itemIndex) in step.thinking"
+                      :key="itemIndex"
+                      class="thinking-item"
+                    >
+                      {{ item }}
+                    </div>
+                  </div>
+                  <div v-if="step.result" class="thinking-result">
+                    <el-collapse>
+                      <el-collapse-item title="查看结果详情" :name="index">
+                        <pre>{{ JSON.stringify(step.result, null, 2) }}</pre>
+                      </el-collapse-item>
+                    </el-collapse>
+                  </div>
+                </div>
+                <div class="thinking-progress" v-if="step.progress !== undefined">
+                  <el-progress
+                    :percentage="step.progress"
+                    :stroke-width="4"
+                    :show-text="false"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- 错误信息 -->
           <el-alert
             v-if="taskError"
@@ -236,20 +302,20 @@
             show-icon
             class="error-alert"
           />
-        </div>
-      </el-card>
+            </div>
+          </el-card>
 
       <!-- 结果展示区域（动态加载） -->
       <el-card shadow="hover" class="section-card result-card">
-        <template #header>
-          <div class="card-header">
-            <el-icon><Document /></el-icon>
-            <span>生成结果</span>
+            <template #header>
+              <div class="card-header">
+                <el-icon><Document /></el-icon>
+                <span>生成结果</span>
             <el-tag v-if="resultMeta.total_function_points" type="info" size="small" style="margin-left: auto;">
               {{ resultMeta.processed_function_points }}/{{ resultMeta.total_function_points }} 功能点
             </el-tag>
-          </div>
-        </template>
+              </div>
+            </template>
 
             <div v-if="hasResult" class="result-summary">
               <el-descriptions :column="2" border size="small">
@@ -264,6 +330,16 @@
                 </el-descriptions-item>
                 <el-descriptions-item label="自动修复或警告">
                   {{ resultMeta.total_warnings }}
+                </el-descriptions-item>
+                <el-descriptions-item label="平均质量评分">
+                  <el-tag :type="getQualityTagType(averageQualityScore)" size="small">
+                    {{ (averageQualityScore * 100).toFixed(1) }}%
+                  </el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="有质量问题的用例">
+                  <el-tag :type="problemCasesCount > 0 ? 'warning' : 'success'" size="small">
+                    {{ problemCasesCount }} / {{ resultCases.length }}
+                  </el-tag>
                 </el-descriptions-item>
               </el-descriptions>
 
@@ -293,7 +369,38 @@
               height="560"
               class="result-table"
             >
-              <el-table-column type="expand">
+              <el-table-column type="index" label="序号" width="60" :index="(index) => index + 1" />
+              <el-table-column prop="module_name" label="功能模块" min-width="150" :show-overflow-tooltip="true" />
+              <el-table-column prop="sub_module" label="子功能点" min-width="120" :show-overflow-tooltip="true">
+                <template #default="{ row }">
+                  <span v-if="row.sub_module" class="sub-module-tag">{{ row.sub_module }}</span>
+                  <span v-else class="sub-module-empty">-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="case_name" label="用例名称" min-width="200" :show-overflow-tooltip="true" />
+              <el-table-column label="前置条件" min-width="150" :show-overflow-tooltip="true">
+                <template #default="{ row }">
+                  <span class="precondition-text">{{ row.preconditions || '无' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="优先级" width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="getPriorityTagType(row.priority)" size="small">
+                    {{ getPriorityLabel(row.priority) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="步骤数" width="80" align="center">
+                <template #default="{ row }">
+                  <span>{{ Array.isArray(row.steps) ? row.steps.length : 0 }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="预期结果" min-width="260" :show-overflow-tooltip="true">
+                <template #default="{ row }">
+                  <span class="expected-text">{{ row.expected_result }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column type="expand" width="50">
                 <template #default="{ row }">
                   <div class="expand-section">
                     <div class="expand-block" v-if="row.sub_module">
@@ -312,20 +419,18 @@
                         </li>
                       </ol>
                     </div>
+                    <div class="expand-block">
+                      <h4>预期结果</h4>
+                      <p>{{ row.expected_result }}</p>
+                    </div>
+                    <div class="expand-block" v-if="row.quality_score !== undefined">
+                      <h4>质量评分</h4>
+                      <el-progress :percentage="row.quality_score * 100" :format="(val) => `${val.toFixed(1)}%`" />
+                      <p style="margin-top: 8px; font-size: 12px; color: var(--color-text-secondary);">
+                        {{ row.quality_issues?.length ? `问题：${row.quality_issues.join('；')}` : '无质量问题' }}
+                      </p>
+                    </div>
                   </div>
-                </template>
-              </el-table-column>
-              <el-table-column prop="module_name" label="所属模块" min-width="150" />
-              <el-table-column prop="sub_module" label="子功能点" min-width="120" :show-overflow-tooltip="true">
-                <template #default="{ row }">
-                  <span v-if="row.sub_module" class="sub-module-tag">{{ row.sub_module }}</span>
-                  <span v-else class="sub-module-empty">-</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="case_name" label="用例名称" min-width="200" />
-              <el-table-column label="预期结果" min-width="260">
-                <template #default="{ row }">
-                  <span class="expected-text">{{ row.expected_result }}</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -336,7 +441,7 @@
             >
               <el-button type="primary" @click="handleGenerate">立即生成</el-button>
             </el-empty>
-      </el-card>
+          </el-card>
 
       <!-- 功能模块确认区域（页面内显示，非弹窗） -->
       <el-card
@@ -360,17 +465,17 @@
               <el-icon><Close /></el-icon>
               关闭
             </el-button>
-          </div>
+    </div>
         </template>
 
-        <FunctionPointsConfirm
+    <FunctionPointsConfirm
           :model-value="showFunctionPointsConfirm"
-          :function-points="extractedFunctionPoints"
-          :requirement-doc="requirementDocForConfirm"
+      :function-points="extractedFunctionPoints"
+      :requirement-doc="requirementDocForConfirm"
           :inline-mode="true"
-          @confirm="handleFunctionPointsConfirm"
-          @cancel="handleFunctionPointsCancel"
-        />
+      @confirm="handleFunctionPointsConfirm"
+      @cancel="handleFunctionPointsCancel"
+    />
       </el-card>
     </div>
   </AiPageLayout>
@@ -395,7 +500,10 @@ import {
   CircleClose,
   Clock,
   List,
-  Close
+  Close,
+  ChatLineRound,
+  Cpu,
+  InfoFilled
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
@@ -413,7 +521,8 @@ const form = reactive({
   modelName: '',
   temperature: 0.7,
   maxTokens: 2048,
-  baseUrl: ''
+  baseUrl: '',
+  needConfirmFunctionPoints: true // 是否需要确认功能点与原文
 })
 
 const advancedPanels = ref([])
@@ -444,12 +553,14 @@ const warnings = ref([])
 const showFunctionPointsConfirm = ref(false)
 const extractedFunctionPoints = ref([])
 const requirementDocForConfirm = ref('')
+const documentUnderstanding = ref(null) // 文档理解结果
 
 // Word文档上传相关
 const wordUploading = ref(false)
 const wordFileName = ref('')
 const extractPollingActive = ref(false)
 const extractTaskId = ref(null) // 提取功能模块的任务ID
+const thinkingSteps = ref([]) // AI思考过程步骤
 
 const extractErrorMessage = (error, fallback = '请求失败，请稍后重试') => {
   if (error?.response?.data?.message) return error.response.data.message
@@ -458,7 +569,135 @@ const extractErrorMessage = (error, fallback = '请求失败，请稍后重试')
 }
 
 const hasResult = computed(() => !!result.value && Array.isArray(result.value.test_cases) && result.value.test_cases.length > 0)
-const resultCases = computed(() => result.value?.test_cases ?? [])
+const resultCases = computed(() => {
+  const cases = result.value?.test_cases ?? []
+  // 为每个用例添加质量评估
+  return cases.map((testCase, index) => {
+    const quality = assessTestCaseQuality(testCase, index + 1)
+    return {
+      ...testCase,
+      quality_score: quality.score,
+      quality_issues: quality.issues,
+      priority: testCase.priority || inferPriority(testCase) // 如果没有优先级，根据用例特征推断
+    }
+  })
+})
+
+// 用例质量评估函数
+const assessTestCaseQuality = (testCase, index) => {
+  const issues = []
+  let score = 1.0
+  
+  // 检查必填字段
+  if (!testCase.case_name || !testCase.case_name.trim()) {
+    issues.push('用例名称为空')
+    score -= 0.3
+  }
+  
+  if (!testCase.module_name || !testCase.module_name.trim()) {
+    issues.push('功能模块为空')
+    score -= 0.2
+  }
+  
+  // 检查步骤
+  const steps = Array.isArray(testCase.steps) ? testCase.steps : []
+  if (steps.length < 2) {
+    issues.push(`步骤数不足（${steps.length}步，建议至少2步）`)
+    score -= 0.2
+  } else if (steps.length < 3) {
+    issues.push(`步骤数较少（${steps.length}步，建议至少3步）`)
+    score -= 0.1
+  }
+  
+  // 检查预期结果
+  if (!testCase.expected_result || !testCase.expected_result.trim()) {
+    issues.push('预期结果为空')
+    score -= 0.3
+  } else {
+    const expectedResult = testCase.expected_result.trim()
+    // 检查是否使用了通用预期结果
+    const genericPatterns = ['正确显示', '正常显示', '验证通过', '符合预期', '满足要求', '点击关闭直接消失']
+    if (genericPatterns.some(pattern => expectedResult.includes(pattern))) {
+      issues.push('使用了通用预期结果，建议使用具体描述')
+      score -= 0.1
+    }
+    // 检查预期结果长度
+    if (expectedResult.length < 5) {
+      issues.push('预期结果过短，可能不够具体')
+      score -= 0.1
+    }
+  }
+  
+  // 检查前置条件（可选，但如果有应该合理）
+  if (testCase.preconditions && testCase.preconditions.trim()) {
+    const preconditions = testCase.preconditions.trim()
+    if (preconditions.length < 3) {
+      issues.push('前置条件过短')
+      score -= 0.05
+    }
+  }
+  
+  // 检查步骤质量
+  steps.forEach((step, stepIndex) => {
+    if (!step || typeof step !== 'string' || step.trim().length < 5) {
+      issues.push(`步骤${stepIndex + 1}描述过短或不清晰`)
+      score -= 0.05
+    }
+    // 检查是否包含禁止的操作
+    const bannedActions = ['登录后台', '查看数据库', '手动投放', '后台操作']
+    if (bannedActions.some(action => step.includes(action))) {
+      issues.push(`步骤${stepIndex + 1}包含不可执行的操作`)
+      score -= 0.1
+    }
+  })
+  
+  score = Math.max(0, Math.min(1, score)) // 限制在0-1之间
+  
+  return { score, issues }
+}
+
+// 根据用例特征推断优先级
+const inferPriority = (testCase) => {
+  const caseName = (testCase.case_name || '').toLowerCase()
+  const expectedResult = (testCase.expected_result || '').toLowerCase()
+  
+  // 高优先级：核心功能、主要流程、关键操作
+  if (caseName.includes('核心') || caseName.includes('主要') || caseName.includes('关键') ||
+      caseName.includes('登录') || caseName.includes('注册') || caseName.includes('支付') ||
+      expectedResult.includes('核心') || expectedResult.includes('主要')) {
+    return 'high'
+  }
+  
+  // 低优先级：边界测试、异常测试、兼容性测试
+  if (caseName.includes('边界') || caseName.includes('异常') || caseName.includes('兼容') ||
+      caseName.includes('极端') || caseName.includes('特殊') ||
+      expectedResult.includes('边界') || expectedResult.includes('异常')) {
+    return 'low'
+  }
+  
+  // 默认中等优先级
+  return 'medium'
+}
+
+// 优先级标签类型
+const getPriorityTagType = (priority) => {
+  const map = {
+    'high': 'danger',
+    'medium': 'warning',
+    'low': 'info'
+  }
+  return map[priority] || 'info'
+}
+
+// 优先级标签文本
+const getPriorityLabel = (priority) => {
+  const map = {
+    'high': '高',
+    'medium': '中',
+    'low': '低'
+  }
+  return map[priority] || '中'
+}
 const isTaskRunning = computed(() => ['pending', 'running'].includes(taskStatus.value))
 const taskStatusLabel = computed(() => {
   switch (taskStatus.value) {
@@ -556,6 +795,29 @@ const resultMeta = computed(() => result.value?.meta ?? {
   processed_function_points: taskMeta.value.processed_function_points,
   total_warnings: warnings.value.length
 })
+
+// 计算平均质量评分
+const averageQualityScore = computed(() => {
+  if (resultCases.value.length === 0) return 0
+  const totalScore = resultCases.value.reduce((sum, testCase) => {
+    return sum + (testCase.quality_score || 0)
+  }, 0)
+  return totalScore / resultCases.value.length
+})
+
+// 计算有质量问题的用例数
+const problemCasesCount = computed(() => {
+  return resultCases.value.filter(testCase => {
+    return (testCase.quality_score || 0) < 0.8 || (testCase.quality_issues?.length || 0) > 0
+  }).length
+})
+
+// 质量评分标签类型
+const getQualityTagType = (score) => {
+  if (score >= 0.9) return 'success'
+  if (score >= 0.7) return 'warning'
+  return 'danger'
+}
 const resultEmptyDescription = computed(() => {
   if (isTaskRunning.value) {
     return '任务执行中，生成结果将陆续展示，请稍候。'
@@ -646,7 +908,8 @@ const buildGeneratePayload = () => {
     throw new Error('请先粘贴需求文档内容后再生成测试用例')
   }
   const payload = {
-    requirement_doc: form.requirementDoc.trim()
+    requirement_doc: form.requirementDoc.trim(),
+    enable_understanding: true // 默认启用文档理解
   }
   if (form.limit) payload.limit = form.limit
   if (form.maxWorkers) payload.max_workers = form.maxWorkers
@@ -654,6 +917,12 @@ const buildGeneratePayload = () => {
   if (form.baseUrl) payload.base_url = form.baseUrl
   if (form.temperature !== undefined && form.temperature !== null) payload.temperature = form.temperature
   if (form.maxTokens) payload.max_tokens = form.maxTokens
+  
+  // 如果有理解结果，传递给后端
+  if (documentUnderstanding.value) {
+    payload.document_understanding = documentUnderstanding.value
+  }
+  
   return payload
 }
 
@@ -707,6 +976,22 @@ const applyTaskUpdate = (taskData) => {
   } else {
     result.value = null
     warnings.value = partialResult?.warnings ?? []
+  }
+  
+  // 更新思考过程（在生成任务中也可能有思考过程）
+  if (partialResult?.type === 'thinking') {
+    const stepsList = partialResult.thinking_steps_list || []
+    if (stepsList.length > 0) {
+      thinkingSteps.value = stepsList
+    } else if (partialResult.thinking_steps) {
+      const step = partialResult.thinking_steps
+      const existingIndex = thinkingSteps.value.findIndex(s => s.step === step.step)
+      if (existingIndex >= 0) {
+        thinkingSteps.value[existingIndex] = step
+      } else {
+        thinkingSteps.value.push(step)
+      }
+    }
   }
 
   taskMeta.value = {
@@ -782,6 +1067,9 @@ const startPolling = () => {
 
 const handleGenerate = async () => {
   try {
+    // 清除之前的思考过程
+    thinkingSteps.value = []
+    
     const payload = buildGeneratePayload()
     isSubmitting.value = true
     extractPollingActive.value = true
@@ -794,7 +1082,8 @@ const handleGenerate = async () => {
       requirement_doc: payload.requirement_doc,
       model_name: payload.model_name,
       base_url: payload.base_url,
-      task_id: payload.task_id
+      task_id: payload.task_id,
+      enable_understanding: payload.enable_understanding || true // 启用文档理解
     })
 
     if (submitResponse.data.code !== 0) {
@@ -867,9 +1156,29 @@ const fetchExtractTaskStatus = async () => {
       taskProgress.value = taskData.progress.progress || 0
     }
     
-    if (status === 'completed') {
-      // 任务完成，获取结果
-      extractPollingActive.value = false
+    // 更新思考过程
+    if (taskData.partial_result?.type === 'thinking') {
+      // 优先使用累积的步骤列表
+      const stepsList = taskData.partial_result.thinking_steps_list || []
+      if (stepsList.length > 0) {
+        // 使用后端累积的步骤列表
+        thinkingSteps.value = stepsList
+      } else if (taskData.partial_result.thinking_steps) {
+        // 兼容：如果只有单个步骤，累积到数组中
+        const step = taskData.partial_result.thinking_steps
+        const existingIndex = thinkingSteps.value.findIndex(s => s.step === step.step)
+        if (existingIndex >= 0) {
+          thinkingSteps.value[existingIndex] = step
+        } else {
+          thinkingSteps.value.push(step)
+        }
+      }
+      console.log('思考过程更新:', thinkingSteps.value.length, '个步骤')
+    }
+
+        if (status === 'completed') {
+          // 任务完成，获取结果
+          extractPollingActive.value = false
       stopExtractPolling()
       
       // 更新进度
@@ -880,34 +1189,67 @@ const fetchExtractTaskStatus = async () => {
       }
       taskProgress.value = 100
       
+      // 任务完成时，也要检查并保存思考过程（如果存在）
+      if (taskData.partial_result?.type === 'thinking') {
+        const stepsList = taskData.partial_result.thinking_steps_list || []
+        if (stepsList.length > 0) {
+          thinkingSteps.value = stepsList
+          console.log('任务完成时保存思考过程:', thinkingSteps.value.length, '个步骤')
+        } else if (taskData.partial_result.thinking_steps) {
+          const step = taskData.partial_result.thinking_steps
+          const existingIndex = thinkingSteps.value.findIndex(s => s.step === step.step)
+          if (existingIndex >= 0) {
+            thinkingSteps.value[existingIndex] = step
+          } else {
+            thinkingSteps.value.push(step)
+          }
+        }
+      }
+      
       const result = taskData.result
-      if (!result) {
-        throw new Error('任务完成但未返回结果')
-      }
+          if (!result) {
+            throw new Error('任务完成但未返回结果')
+          }
 
-      extractedFunctionPoints.value = result.function_points || []
-      requirementDocForConfirm.value = result.requirement_doc || form.requirementDoc
+          extractedFunctionPoints.value = result.function_points || []
+          requirementDocForConfirm.value = result.requirement_doc || form.requirementDoc
+          
+          // 保存理解结果
+          if (result.document_understanding) {
+            documentUnderstanding.value = result.document_understanding
+            console.log('文档理解结果已保存:', documentUnderstanding.value)
+          } else {
+            documentUnderstanding.value = null
+          }
 
-      if (extractedFunctionPoints.value.length === 0) {
-        ElMessage.warning('未能提取到功能模块，将直接生成测试用例')
-        // 如果没有提取到功能模块，使用原来的流程
+          if (extractedFunctionPoints.value.length === 0) {
+            ElMessage.warning('未能提取到功能模块，将直接生成测试用例')
+            // 如果没有提取到功能模块，使用原来的流程
         const payload = buildGeneratePayload()
-        await handleGenerateDirectly(payload)
-        return
-      }
+            await handleGenerateDirectly(payload)
+            return
+          }
 
-      // 显示功能模块确认对话框
-      showFunctionPointsConfirm.value = true
-      ElMessage.success(`已提取到 ${extractedFunctionPoints.value.length} 个功能模块，请确认`)
-      isSubmitting.value = false
-    } else if (status === 'failed') {
-      extractPollingActive.value = false
+          // 根据用户选择决定是否需要确认功能点
+          if (form.needConfirmFunctionPoints) {
+            // 需要确认：显示功能模块确认对话框
+            showFunctionPointsConfirm.value = true
+            ElMessage.success(`已提取到 ${extractedFunctionPoints.value.length} 个功能模块，请确认`)
+            isSubmitting.value = false
+          } else {
+            // 不需要确认：直接使用提取到的功能点生成测试用例
+            ElMessage.success(`已提取到 ${extractedFunctionPoints.value.length} 个功能模块，直接生成测试用例`)
+            const payload = buildGeneratePayload()
+            await handleGenerateDirectly(payload, extractedFunctionPoints.value)
+          }
+        } else if (status === 'failed') {
+          extractPollingActive.value = false
       stopExtractPolling()
-      taskStatus.value = 'failed'
+        taskStatus.value = 'failed'
       taskError.value = taskData.error || '提取功能模块失败'
       ElMessage.error(taskData.error || '提取功能模块失败')
-      isSubmitting.value = false
-    }
+        isSubmitting.value = false
+      }
     // pending 或 running 状态继续轮询，由定时器控制
   } catch (error) {
     console.error('获取提取任务状态失败:', error)
@@ -956,7 +1298,9 @@ const handleFunctionPointsConfirm = async (confirmData) => {
       ...payload,
       confirmed_function_points: confirmData.confirmedFunctionPoints,
       original_function_points: confirmData.originalFunctionPoints,
-      operation_history: confirmData.operationHistory
+      operation_history: confirmData.operationHistory,
+      enable_understanding: payload.enable_understanding || true, // 启用文档理解
+      document_understanding: documentUnderstanding.value // 传递理解结果
     }
 
     // 使用异步生成接口
@@ -991,8 +1335,8 @@ const handleFunctionPointsCancel = () => {
   // 不显示提示信息，静默关闭对话框
 }
 
-const handleGenerateDirectly = async (payload) => {
-  // 原有的直接生成流程（用于没有提取到功能点的情况）
+const handleGenerateDirectly = async (payload, confirmedFunctionPoints = null) => {
+  // 原有的直接生成流程（用于没有提取到功能点的情况，或用户选择跳过确认的情况）
   warnings.value = []
   result.value = null
   taskLogs.value = []
@@ -1005,6 +1349,17 @@ const handleGenerateDirectly = async (payload) => {
     processed_function_points: 0,
     total_warnings: 0,
     limit: payload.limit ?? 0
+  }
+  
+  // 如果提供了确认的功能点，使用它们
+  if (confirmedFunctionPoints && confirmedFunctionPoints.length > 0) {
+    payload.confirmed_function_points = confirmedFunctionPoints
+  }
+
+  // 确保传递理解结果
+  if (documentUnderstanding.value) {
+    payload.document_understanding = documentUnderstanding.value
+    payload.enable_understanding = true
   }
 
   const response = await aiApi.createGenerationTask(payload)
@@ -1035,6 +1390,11 @@ const handleReset = () => {
   taskError.value = null
   result.value = null
   warnings.value = []
+  documentUnderstanding.value = null // 清除理解结果
+  extractedFunctionPoints.value = []
+  requirementDocForConfirm.value = ''
+  showFunctionPointsConfirm.value = false
+  thinkingSteps.value = [] // 清除思考过程
   taskMeta.value = {
     total_function_points: 0,
     processed_function_points: 0,
@@ -1069,18 +1429,80 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.ai-generator-page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+/* ========== 基础变量 ========== */
+:root {
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-primary-active: #1d4ed8;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  
+  --color-text-primary: #111827;
+  --color-text-secondary: #6b7280;
+  --color-text-tertiary: #9ca3af;
+  
+  --color-border: #e5e7eb;
+  --color-bg: #ffffff;
+  --color-bg-secondary: #f9fafb;
+  --color-bg-hover: #f3f4f6;
+  
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
 }
 
+/* ========== 页面容器 ========== */
+.ai-generator-page {
+  min-height: 100vh;
+  background: var(--color-bg-secondary);
+  padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+/* ========== 卡片基础样式 ========== */
 .section-card {
-  border-radius: 16px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s ease;
+}
+
+.section-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.section-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--color-text-primary);
+}
+
+.section-card .card-header .el-icon {
+  margin-right: var(--spacing-sm);
+  color: var(--color-primary);
 }
 
 .progress-card {
-  margin-top: 16px;
+  margin-top: var(--spacing-md);
 }
 
 .task-summary {
@@ -1169,12 +1591,7 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 
-.card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-}
+/* card-header 已在上面定义 */
 
 .config-form {
   display: flex;
@@ -1219,8 +1636,35 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
+/* ========== 结果表格（简化版） ========== */
 .result-table {
-  margin-top: 8px;
+  margin-top: var(--spacing-sm);
+}
+
+.result-table .el-table {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.result-table .el-table th {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.result-table .el-table td {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.result-table .el-table--striped .el-table__body tr.el-table__row--striped td {
+  background: var(--color-bg-secondary);
+}
+
+.result-table .el-table__body tr:hover > td {
+  background: var(--color-bg-hover) !important;
 }
 
 .expand-section {
@@ -1289,51 +1733,54 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-secondary);
 }
 
-/* 阶段列表 */
+/* ========== 阶段列表（简化版） ========== */
 .stage-list {
-  margin-top: 16px;
+  margin-top: var(--spacing-md);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--spacing-sm);
 }
 
 .stage-item {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
-  border-radius: 8px;
-  background: #f5f7fa;
-  transition: all 0.3s;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+  transition: background 0.2s ease;
+}
+
+.stage-item:hover {
+  background: var(--color-bg-hover);
 }
 
 .stage-item.stage-completed {
-  background: #f0f9ff;
-  border-left: 3px solid var(--el-color-success);
+  background: #ecfdf5;
+  border-left: 3px solid var(--color-success);
 }
 
 .stage-item.stage-running {
-  background: #fef0e6;
-  border-left: 3px solid var(--el-color-warning);
-  animation: pulse 2s ease-in-out infinite;
+  background: #fef3c7;
+  border-left: 3px solid var(--color-warning);
 }
 
 .stage-item.stage-waiting {
-  background: #f5f7fa;
-  border-left: 3px solid #e4e7ed;
+  background: var(--color-bg-secondary);
+  border-left: 3px solid var(--color-border);
   opacity: 0.6;
 }
 
 .stage-icon {
-  margin-right: 12px;
-  font-size: 20px;
+  margin-right: var(--spacing-sm);
+  font-size: 18px;
 }
 
 .stage-item.stage-completed .stage-icon {
-  color: var(--el-color-success);
+  color: var(--color-success);
 }
 
 .stage-item.stage-running .stage-icon {
-  color: var(--el-color-warning);
+  color: var(--color-warning);
   animation: rotate 2s linear infinite;
 }
 
@@ -1343,32 +1790,34 @@ onBeforeUnmount(() => {
 
 .stage-name {
   font-weight: 500;
-  margin-bottom: 4px;
-  color: var(--el-text-color-primary);
+  font-size: 14px;
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
 }
 
 .stage-message {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 
 .stage-progress {
   font-size: 14px;
-  color: var(--el-text-color-regular);
+  color: var(--color-text-primary);
   font-weight: 500;
-  margin-left: 12px;
+  margin-left: var(--spacing-sm);
 }
 
-/* 当前处理项 */
+/* ========== 当前处理项 ========== */
 .current-item {
-  margin-top: 16px;
-  padding: 12px 16px;
-  background: #ecf5ff;
-  border-radius: 8px;
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: #eff6ff;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
-  gap: 8px;
-  border-left: 3px solid var(--el-color-primary);
+  gap: var(--spacing-sm);
+  border-left: 3px solid var(--color-primary);
+  font-size: 14px;
 }
 
 .loading-icon {
@@ -1386,7 +1835,175 @@ onBeforeUnmount(() => {
 }
 
 .error-alert {
-  margin-top: 16px;
+  margin-top: var(--spacing-md);
+}
+
+/* ========== 结果表格（简化版） ========== */
+.result-table {
+  margin-top: var(--spacing-sm);
+}
+
+.result-table .el-table {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.result-table .el-table th {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.result-table .el-table td {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.result-table .el-table--striped .el-table__body tr.el-table__row--striped td {
+  background: var(--color-bg-secondary);
+}
+
+.result-table .el-table__body tr:hover > td {
+  background: var(--color-bg-hover) !important;
+}
+
+/* ========== AI思考过程展示（优化版） ========== */
+.thinking-process {
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-md);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-header:hover {
+  color: var(--color-primary);
+}
+
+.thinking-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.thinking-message {
+  display: flex;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-primary);
+  transition: all 0.2s ease;
+}
+
+.thinking-message:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.thinking-message.step-complete {
+  border-left-color: var(--color-success);
+}
+
+.thinking-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-primary) 0%, #6366f1 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.thinking-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.thinking-title {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.thinking-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-sm);
+}
+
+.thinking-item {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  padding-left: var(--spacing-md);
+  position: relative;
+}
+
+.thinking-item::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--color-primary);
+  font-weight: bold;
+}
+
+.thinking-result {
+  margin-top: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+}
+
+.thinking-result pre {
+  margin: 0;
+  padding: var(--spacing-sm);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--color-text-secondary);
+}
+
+.thinking-progress {
+  width: 60px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.thinking-empty {
+  padding: var(--spacing-md);
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+}
+
+.thinking-empty .el-icon {
+  animation: rotate 2s linear infinite;
 }
 
 /* 结果卡片 */

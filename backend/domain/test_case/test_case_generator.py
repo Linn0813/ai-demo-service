@@ -11,7 +11,12 @@ from shared.config import RE_JSON_CASE, ExtractionConfig
 from shared.debug_recorder import record_ai_debug
 from domain.test_case.extractors import FunctionModuleExtractor, _parse_json_with_fallback
 from infrastructure.llm.service import LLMService
-from domain.test_case.prompts import build_generation_prompt, build_function_point_extraction_prompt
+from domain.test_case.prompts import (
+    build_generation_prompt,
+    build_generation_prompt_with_understanding,
+    build_function_point_extraction_prompt
+)
+from models.schemas import DocumentUnderstanding
 from domain.test_case.validators import clean_test_cases, repair_expected_results, run_static_validation
 from shared.logger import log
 
@@ -37,8 +42,17 @@ class TestCaseGenerator:
         self.extractor = FunctionModuleExtractor(llm_service)
 
     # === 功能模块提取 ===
-    def extract_function_modules_with_content(self, requirement_doc: str, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        return self.extractor.extract_function_modules_with_content(requirement_doc, run_id=run_id)
+    def extract_function_modules_with_content(
+        self,
+        requirement_doc: str,
+        run_id: Optional[str] = None,
+        understanding: Optional[DocumentUnderstanding] = None
+    ) -> List[Dict[str, Any]]:
+        return self.extractor.extract_function_modules_with_content(
+            requirement_doc,
+            run_id=run_id,
+            understanding=understanding
+        )
 
     def extract_function_points_with_content(self, requirement_doc: str, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
         return self.extractor.extract_function_points_with_content(requirement_doc, run_id=run_id)
@@ -133,7 +147,7 @@ class TestCaseGenerator:
 
 **重要：只输出JSON格式，不要任何其他文字！**
 
-【需求文档】
+【需求文档片段】
 {doc_snippet}
 
 【功能点】
@@ -210,6 +224,9 @@ class TestCaseGenerator:
    - 禁止使用"点击关闭直接消失"等通用描述
    - 禁止使用"正确显示"、"正常显示"、"验证通过"等模糊描述
    - 禁止使用"符合预期"、"满足要求"等抽象描述
+   - **严格禁止使用"卡片内容"、"页面内容"、"界面内容"等模糊描述**
+   - **如果需求文档中写"显示标题：XX"，expected_result必须写"显示标题：XX"（不能写成"卡片内容"）**
+   - **如果需求文档中写"点击【XX按钮】后跳转到XX页面"，expected_result必须写"点击【XX按钮】后跳转到XX页面"（不能写成"卡片内容"）**
    - 必须使用需求文档中的具体描述
 
 6. **找不到原文时的处理**
@@ -226,7 +243,7 @@ class TestCaseGenerator:
 6. **所有测试步骤必须是App端可执行的实际操作，禁止出现"登录后台""查看数据库""手动投放"等后台或运营动作**
 7. **避免写入无法执行的描述（例如"等待7天"），遇到时改写为可执行的验证步骤或拆分为前置条件**
 8. **每个测试用例的steps必须至少包含3条明确的操作步骤，每一步都要描述具体的用户操作**
-9. **步骤要详细具体，例如："1. 打开App，进入觉知页"、"2. 查看Banner是否显示"、"3. 点击【去评分】按钮"**
+9. **步骤要详细具体，例如："1. 打开App，进入XX页面"、"2. 查看XX元素是否显示"、"3. 点击【XX按钮】"**
 10. **不要将多个操作合并为一个步骤，每个步骤只描述一个操作**
 
 【输出格式】
@@ -474,8 +491,8 @@ class TestCaseGenerator:
                         # 将等待描述移到前置条件或改为验证步骤
                         wait_match = self._WAIT_PATTERN.search(step)
                         if wait_match:
-                            # 改为验证步骤："验证X天后Banner是否自动消失"
-                            fixed_step = step.replace(wait_match.group(), "验证Banner是否自动消失")
+                            # 改为验证步骤："验证XX元素是否自动消失"
+                            fixed_step = step.replace(wait_match.group(), "验证XX元素是否自动消失")
                             fixed_steps.append(fixed_step)
                             warnings.append(f"[{function_point}] 第{idx}条用例已修复'等待X天'描述")
                         else:
@@ -595,6 +612,7 @@ class TestCaseGenerator:
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         confirmed_function_points: Optional[List[Dict[str, Any]]] = None,
         trace_id: Optional[str] = None,
+        understanding: Optional[DocumentUnderstanding] = None,
     ) -> Dict:
         """
         生成测试用例 - 为每个功能模块分别生成
@@ -669,7 +687,11 @@ class TestCaseGenerator:
                 "message": "未提取到功能模块，改为整体生成。",
             })
             # 如果没有提取到功能点，使用原来的方式
-            prompt = build_generation_prompt(requirement_doc)
+            if understanding and understanding.quality_score > 0.0:
+                prompt = build_generation_prompt_with_understanding(requirement_doc, understanding)
+                log.debug("使用增强的测试用例生成提示词（基于理解结果）")
+            else:
+                prompt = build_generation_prompt(requirement_doc)
             # 打印发送给模型的完整Prompt（用于调试）
             log.debug(f"[完整Prompt]")
             log.debug(f"{'='*60}")

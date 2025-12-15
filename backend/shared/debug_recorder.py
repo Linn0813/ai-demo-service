@@ -10,7 +10,9 @@ from typing import Any, Dict, Optional
 from shared.logger import log
 
 
-_BASE_DIR = Path(__file__).parent.parent.parent.parent.parent / "data" / "debug" / "ai_runs"
+# 获取项目根目录（backend/shared/debug_recorder.py -> backend -> 项目根目录）
+# 从 backend/shared/debug_recorder.py 向上两级到项目根目录
+_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "debug" / "ai_runs"
 
 
 def _ensure_dir() -> Path:

@@ -1,0 +1,475 @@
+/* ============================================
+   AI测试用例生成页面 - 简洁样式方案
+   ============================================ */
+
+/* ========== 基础变量 ========== */
+:root {
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-primary-active: #1d4ed8;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  
+  --color-text-primary: #111827;
+  --color-text-secondary: #6b7280;
+  --color-text-tertiary: #9ca3af;
+  
+  --color-border: #e5e7eb;
+  --color-bg: #ffffff;
+  --color-bg-secondary: #f9fafb;
+  --color-bg-hover: #f3f4f6;
+  
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+/* ========== 页面容器 ========== */
+.ai-generator-page {
+  min-height: 100vh;
+  background: var(--color-bg-secondary);
+  padding: var(--spacing-lg);
+}
+
+/* ========== 顶部操作栏 ========== */
+.top-bar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--spacing-md) var(--spacing-lg);
+  margin: calc(-1 * var(--spacing-lg)) calc(-1 * var(--spacing-lg)) var(--spacing-lg);
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.top-bar .el-input {
+  flex: 1;
+}
+
+.top-bar .el-button {
+  flex-shrink: 0;
+}
+
+/* ========== 卡片基础样式 ========== */
+.section-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: var(--spacing-lg);
+  transition: box-shadow 0.2s ease;
+}
+
+.section-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.section-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--color-text-primary);
+}
+
+.section-card .card-header .el-icon {
+  margin-right: var(--spacing-sm);
+  color: var(--color-primary);
+}
+
+/* ========== 进度卡片 ========== */
+.progress-card {
+  /* 简化样式，减少视觉噪音 */
+}
+
+.task-progress-container {
+  padding: var(--spacing-lg);
+}
+
+.overall-progress {
+  margin-bottom: var(--spacing-md);
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--spacing-sm);
+  font-size: 14px;
+}
+
+.status-text {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.progress-text {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+/* ========== 阶段列表（简化版） ========== */
+.stage-list {
+  margin-top: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.stage-item {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+  transition: background 0.2s ease;
+}
+
+.stage-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.stage-item.stage-completed {
+  background: #ecfdf5;
+  border-left: 3px solid var(--color-success);
+}
+
+.stage-item.stage-running {
+  background: #fef3c7;
+  border-left: 3px solid var(--color-warning);
+}
+
+.stage-icon {
+  margin-right: var(--spacing-sm);
+  font-size: 18px;
+}
+
+.stage-content {
+  flex: 1;
+}
+
+.stage-name {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+
+.stage-message {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+/* ========== 思考过程（优化版） ========== */
+.thinking-process {
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-md);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-header:hover {
+  color: var(--color-primary);
+}
+
+.thinking-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.thinking-message {
+  display: flex;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-primary);
+  transition: all 0.2s ease;
+}
+
+.thinking-message:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.thinking-message.step-complete {
+  border-left-color: var(--color-success);
+}
+
+.thinking-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-primary) 0%, #6366f1 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.thinking-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.thinking-title {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.thinking-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-sm);
+}
+
+.thinking-item {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  padding-left: var(--spacing-md);
+  position: relative;
+}
+
+.thinking-item::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--color-primary);
+  font-weight: bold;
+}
+
+.thinking-result {
+  margin-top: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+}
+
+.thinking-result pre {
+  margin: 0;
+  padding: var(--spacing-sm);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--color-text-secondary);
+}
+
+.thinking-progress {
+  width: 60px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* ========== 功能模块确认（简化版） ========== */
+.function-points-card {
+  /* 简化样式 */
+}
+
+.function-points-list {
+  padding: var(--spacing-md);
+}
+
+.function-point-item {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--spacing-xs);
+  transition: background 0.2s ease;
+}
+
+.function-point-item:hover {
+  background: var(--color-bg-secondary);
+}
+
+.function-point-item .el-checkbox {
+  margin-right: var(--spacing-sm);
+}
+
+/* ========== 结果表格（简化版） ========== */
+.result-card {
+  /* 简化样式 */
+}
+
+.result-table {
+  margin-top: var(--spacing-sm);
+}
+
+.result-table .el-table {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.result-table .el-table th {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.result-table .el-table td {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.result-table .el-table--striped .el-table__body tr.el-table__row--striped td {
+  background: var(--color-bg-secondary);
+}
+
+.result-table .el-table__body tr:hover > td {
+  background: var(--color-bg-hover) !important;
+}
+
+/* ========== 按钮优化 ========== */
+.el-button--primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  font-weight: 500;
+}
+
+.el-button--primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.el-button--primary:active {
+  background: var(--color-primary-active);
+  border-color: var(--color-primary-active);
+}
+
+/* ========== 输入框优化 ========== */
+.el-input__wrapper {
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--color-primary) inset;
+}
+
+.el-input.is-focus .el-input__wrapper {
+  box-shadow: 0 0 0 1px var(--color-primary) inset;
+}
+
+/* ========== 进度条优化 ========== */
+.el-progress-bar__outer {
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+}
+
+.el-progress-bar__inner {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--color-primary) 0%, #6366f1 100%);
+}
+
+/* ========== 响应式设计 ========== */
+@media (max-width: 768px) {
+  .ai-generator-page {
+    padding: var(--spacing-md);
+  }
+  
+  .top-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .top-bar .el-input {
+    width: 100%;
+  }
+  
+  .section-card {
+    margin-bottom: var(--spacing-md);
+  }
+  
+  .thinking-message {
+    flex-direction: column;
+  }
+  
+  .thinking-progress {
+    width: 100%;
+    margin-top: var(--spacing-sm);
+  }
+}
+
+/* ========== 动画效果 ========== */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.section-card {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.thinking-message {
+  animation: fadeIn 0.2s ease-out;
+}
+
+/* ========== 工具类 ========== */
+.text-primary {
+  color: var(--color-text-primary);
+}
+
+.text-secondary {
+  color: var(--color-text-secondary);
+}
+
+.text-tertiary {
+  color: var(--color-text-tertiary);
+}
+
+.bg-secondary {
+  background: var(--color-bg-secondary);
+}
+
+.border-subtle {
+  border-color: var(--color-border);
+}
+
