@@ -8,9 +8,11 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import router
-from app.config import settings
-from app.schemas.common import HealthResponse
+from api import router
+from shared.config import settings
+from models import HealthResponse
+from domain.task.manager import get_task_manager
+from shared.logger import log
 
 
 def create_app() -> FastAPI:
@@ -44,6 +46,21 @@ def create_app() -> FastAPI:
         return HealthResponse(status="ok", version=settings.app_version, name=settings.app_name)
 
     app.include_router(router)
+    
+    # 初始化任务管理器
+    @app.on_event("startup")
+    def startup_event():
+        """应用启动时初始化任务管理器。"""
+        task_manager = get_task_manager()
+        log.info("任务管理器已初始化")
+    
+    @app.on_event("shutdown")
+    def shutdown_event():
+        """应用关闭时清理任务管理器。"""
+        task_manager = get_task_manager()
+        task_manager.shutdown()
+        log.info("任务管理器已关闭")
+    
     return app
 
 

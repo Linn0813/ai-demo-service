@@ -53,15 +53,33 @@ export const aiApi = {
     return adaptResponse(response)
   },
 
-  // 生成测试用例
+  // 生成测试用例 - 同步接口（可能超时）
   async generateTestCases(data) {
     const response = await aiRequest.post('/api/v1/test-cases/generate', data)
     return adaptResponse(response)
   },
 
-  // 提取功能模块并匹配原文（用于用户确认）
+  // 异步生成测试用例（提交任务）
+  async createGenerationTask(data) {
+    const response = await aiRequest.post('/api/v1/test-cases/generate-async', data)
+    return adaptResponse(response)
+  },
+
+  // 提取功能模块并匹配原文（用于用户确认）- 同步接口（可能超时）
   async extractFunctionModules(data) {
     const response = await aiRequest.post('/api/v1/function-modules/extract', data)
+    return adaptResponse(response)
+  },
+
+  // 异步提取功能模块（提交任务）
+  async extractFunctionModulesAsync(data) {
+    const response = await aiRequest.post('/api/v1/function-modules/extract-async', data)
+    return adaptResponse(response)
+  },
+
+  // 查询任务状态
+  async getTaskStatus(taskId) {
+    const response = await aiRequest.get(`/api/v1/tasks/${taskId}`)
     return adaptResponse(response)
   },
 

@@ -21,15 +21,24 @@
     </template>
 
     <div class="ai-generator-page">
-      <el-row :gutter="16">
-        <el-col :lg="10" :md="24">
-          <el-card shadow="hover" class="section-card">
-            <template #header>
-              <div class="card-header">
-                <el-icon><Edit /></el-icon>
-                <span>生成配置</span>
-              </div>
-            </template>
+      <!-- 配置区域（可折叠） -->
+      <el-card shadow="hover" class="section-card config-card">
+        <template #header>
+          <div class="card-header">
+            <el-icon><Edit /></el-icon>
+            <span>生成配置</span>
+            <el-button 
+              text 
+              @click="configCollapsed = !configCollapsed"
+              class="collapse-btn"
+            >
+              <el-icon>
+                <component :is="configCollapsed ? 'ArrowDown' : 'ArrowUp'" />
+              </el-icon>
+            </el-button>
+          </div>
+        </template>
+        <div v-show="!configCollapsed">
 
             <el-form
               ref="formRef"
@@ -157,65 +166,90 @@
                 />
               </el-form-item>
             </el-form>
-          </el-card>
+        </div>
+      </el-card>
 
-          <el-card
-            v-if="taskId"
-            shadow="hover"
-            class="section-card progress-card"
-          >
-            <template #header>
-              <div class="card-header">
-                <el-icon><Loading /></el-icon>
-                <span>执行进度</span>
-              </div>
-            </template>
+      <!-- 任务进度区域（实时更新） -->
+      <el-card
+        v-if="taskId || extractTaskId"
+        shadow="hover"
+        class="section-card progress-card"
+      >
+        <template #header>
+          <div class="card-header">
+            <el-icon><Loading /></el-icon>
+            <span>任务进度</span>
+            <el-tag v-if="taskProgressInfo" type="info" size="small" style="margin-left: auto;">
+              {{ taskProgressInfo.current || 0 }}/{{ taskProgressInfo.total || 0 }}
+            </el-tag>
+          </div>
+        </template>
 
-            <div class="task-summary">
-              <div class="task-status-line">
-                <div class="status-left">
-                  <el-icon :class="['status-icon', progressStatus]">
-                    <component :is="statusIcon" />
-                  </el-icon>
-                  <span class="status-text">{{ taskStatusLabel }}</span>
+        <div class="task-progress-container">
+          <!-- 总体进度条 -->
+          <div class="overall-progress">
+            <el-progress
+              :percentage="progressPercentage"
+              :status="progressStatus"
+              :stroke-width="16"
+            />
+            <div class="progress-info">
+              <span class="status-text">{{ taskStatusLabel }}</span>
+              <span class="progress-text">{{ progressText }}</span>
+            </div>
+          </div>
+
+          <!-- 执行阶段列表 -->
+          <div class="stage-list" v-if="stages.length > 0">
+            <div
+              v-for="(stage, index) in stages"
+              :key="index"
+              :class="['stage-item', `stage-${stage.status}`]"
+            >
+              <el-icon class="stage-icon">
+                <component :is="getStageIcon(stage.status)" />
+              </el-icon>
+              <div class="stage-content">
+                <div class="stage-name">{{ stage.name }}</div>
+                <div class="stage-message" v-if="stage.message">
+                  {{ stage.message }}
                 </div>
-                <span v-if="taskError" class="status-error">{{ taskError }}</span>
               </div>
-              <el-progress
-                :percentage="taskProgress"
-                :status="progressStatus"
-                :stroke-width="12"
-              />
-            </div>
-
-            <div class="log-panel">
-              <el-scrollbar height="160px">
-                <ul class="log-list">
-                  <li
-                    v-for="(log, index) in taskLogs"
-                    :key="`${log.time}-${index}`"
-                    :class="['log-item', `log-${log.level || 'info'}`]"
-                  >
-                    <span class="log-time">{{ formatLogTime(log.time) }}</span>
-                    <span class="log-message">{{ log.message }}</span>
-                  </li>
-                  <li v-if="taskLogs.length === 0" class="log-item log-empty">
-                    暂无日志
-                  </li>
-                </ul>
-              </el-scrollbar>
-            </div>
-          </el-card>
-        </el-col>
-
-        <el-col :lg="14" :md="24">
-          <el-card shadow="hover" class="section-card">
-            <template #header>
-              <div class="card-header">
-                <el-icon><Document /></el-icon>
-                <span>生成结果</span>
+              <div class="stage-progress" v-if="stage.current !== undefined && stage.total !== undefined">
+                {{ stage.current }}/{{ stage.total }}
               </div>
-            </template>
+            </div>
+          </div>
+
+          <!-- 当前处理项 -->
+          <div class="current-item" v-if="taskProgressInfo?.current_item">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span>正在处理: <strong>{{ taskProgressInfo.current_item }}</strong></span>
+          </div>
+
+          <!-- 错误信息 -->
+          <el-alert
+            v-if="taskError"
+            :title="taskError"
+            type="error"
+            :closable="false"
+            show-icon
+            class="error-alert"
+          />
+        </div>
+      </el-card>
+
+      <!-- 结果展示区域（动态加载） -->
+      <el-card shadow="hover" class="section-card result-card">
+        <template #header>
+          <div class="card-header">
+            <el-icon><Document /></el-icon>
+            <span>生成结果</span>
+            <el-tag v-if="resultMeta.total_function_points" type="info" size="small" style="margin-left: auto;">
+              {{ resultMeta.processed_function_points }}/{{ resultMeta.total_function_points }} 功能点
+            </el-tag>
+          </div>
+        </template>
 
             <div v-if="hasResult" class="result-summary">
               <el-descriptions :column="2" border size="small">
@@ -302,19 +336,43 @@
             >
               <el-button type="primary" @click="handleGenerate">立即生成</el-button>
             </el-empty>
-          </el-card>
-        </el-col>
-      </el-row>
-    </div>
+      </el-card>
 
-    <!-- 功能点确认对话框 -->
-    <FunctionPointsConfirm
-      v-model="showFunctionPointsConfirm"
-      :function-points="extractedFunctionPoints"
-      :requirement-doc="requirementDocForConfirm"
-      @confirm="handleFunctionPointsConfirm"
-      @cancel="handleFunctionPointsCancel"
-    />
+      <!-- 功能模块确认区域（页面内显示，非弹窗） -->
+      <el-card
+        v-if="showFunctionPointsConfirm"
+        shadow="hover"
+        class="section-card function-points-card"
+      >
+        <template #header>
+          <div class="card-header">
+            <el-icon><List /></el-icon>
+            <span>功能模块确认</span>
+            <el-tag type="info" size="small" style="margin-left: 8px;">
+              共 {{ extractedFunctionPoints.length }} 个功能模块
+            </el-tag>
+            <el-button
+              text
+              size="small"
+              @click="handleFunctionPointsCancel"
+              style="margin-left: auto;"
+            >
+              <el-icon><Close /></el-icon>
+              关闭
+            </el-button>
+          </div>
+        </template>
+
+        <FunctionPointsConfirm
+          :model-value="showFunctionPointsConfirm"
+          :function-points="extractedFunctionPoints"
+          :requirement-doc="requirementDocForConfirm"
+          :inline-mode="true"
+          @confirm="handleFunctionPointsConfirm"
+          @cancel="handleFunctionPointsCancel"
+        />
+      </el-card>
+    </div>
   </AiPageLayout>
 </template>
 
@@ -330,7 +388,14 @@ import {
   Loading,
   MagicStick,
   Upload,
-  WarningFilled
+  WarningFilled,
+  ArrowDown,
+  ArrowUp,
+  CircleCheck,
+  CircleClose,
+  Clock,
+  List,
+  Close
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
@@ -355,11 +420,13 @@ const advancedPanels = ref([])
 const isSubmitting = ref(false)
 const modelsLoading = ref(false)
 const modelList = ref([])
+const configCollapsed = ref(false)
 
 const taskId = ref(null)
 const taskStatus = ref('idle')
 const previousStatus = ref(null)
 const taskProgress = ref(0)
+const taskProgressInfo = ref(null) // 新增：详细的进度信息
 const taskLogs = ref([])
 const taskError = ref(null)
 const taskMeta = ref({
@@ -381,6 +448,8 @@ const requirementDocForConfirm = ref('')
 // Word文档上传相关
 const wordUploading = ref(false)
 const wordFileName = ref('')
+const extractPollingActive = ref(false)
+const extractTaskId = ref(null) // 提取功能模块的任务ID
 
 const extractErrorMessage = (error, fallback = '请求失败，请稍后重试') => {
   if (error?.response?.data?.message) return error.response.data.message
@@ -418,6 +487,58 @@ const statusIcon = computed(() => {
   if (isTaskRunning.value) return Loading
   return WarningFilled
 })
+
+// 新增：进度相关计算属性
+const progressPercentage = computed(() => {
+  if (taskProgressInfo.value?.progress !== undefined) {
+    return Math.min(100, Math.max(0, taskProgressInfo.value.progress))
+  }
+  return taskProgress.value
+})
+
+const progressText = computed(() => {
+  if (taskProgressInfo.value?.current && taskProgressInfo.value?.total) {
+    return `${taskProgressInfo.value.current}/${taskProgressInfo.value.total}`
+  }
+  return `${progressPercentage.value}%`
+})
+
+const stages = computed(() => {
+  const stageMap = {
+    'extracting_modules': { name: '提取功能模块', order: 1 },
+    'generating_test_cases': { name: '生成测试用例', order: 2 },
+    'validating': { name: '验证和修复', order: 3 }
+  }
+  
+  const currentStage = taskProgressInfo.value?.stage
+  const result = []
+  
+  for (const [key, info] of Object.entries(stageMap)) {
+    let status = 'waiting'
+    if (key === currentStage) {
+      status = taskStatus.value === 'running' ? 'running' : 'completed'
+    } else if (currentStage && stageMap[currentStage]?.order > info.order) {
+      status = 'completed'
+    }
+    
+    result.push({
+      ...info,
+      status,
+      message: key === currentStage ? taskProgressInfo.value?.message : null,
+      current: taskProgressInfo.value?.current,
+      total: taskProgressInfo.value?.total
+    })
+  }
+  
+  return result
+})
+
+const getStageIcon = (status) => {
+  if (status === 'completed') return CircleCheck
+  if (status === 'failed') return CircleClose
+  if (status === 'running') return Loading
+  return Clock
+}
 const formatLogTime = (value) => {
   if (!value) return ''
   try {
@@ -548,6 +669,11 @@ const applyTaskUpdate = (taskData) => {
   taskProgress.value = Math.min(100, Math.max(0, Number(taskData.progress ?? 0)))
   taskLogs.value = taskData.logs ?? []
   taskError.value = taskData.error || null
+  
+  // 更新详细的进度信息
+  if (taskData.progress_info) {
+    taskProgressInfo.value = taskData.progress_info
+  }
 
   const meta = taskData.meta ?? {}
   taskMeta.value = {
@@ -608,13 +734,43 @@ const fetchTaskStatus = async () => {
       throw new Error(response.data.message || '获取任务状态失败')
     }
     const taskData = response.data.data ?? {}
-    applyTaskUpdate(taskData)
+    
+    // 适配任务管理器返回的格式
+    // 如果任务完成，将 result 字段映射到前端期望的格式
+    if (taskData.status === 'completed' && taskData.result) {
+      // 任务完成，应用结果
+      applyTaskUpdate({
+        status: 'success',
+        result: taskData.result,
+        progress: 100,
+        progress_info: taskData.progress || { progress: 100 }
+      })
+      isSubmitting.value = false
+    } else if (taskData.status === 'failed') {
+      // 任务失败
+      applyTaskUpdate({
+        status: 'failed',
+        error: taskData.error || '任务执行失败',
+        progress: 0,
+        progress_info: null
+      })
+      isSubmitting.value = false
+    } else {
+      // 任务进行中，更新进度信息
+      applyTaskUpdate({
+        status: 'running',
+        progress: taskData.progress?.progress || 0,
+        progress_info: taskData.progress, // 使用后端返回的详细进度信息
+        partial_result: taskData.partial_result // 更新部分结果
+      })
+    }
   } catch (error) {
     console.error('获取任务状态失败:', error)
     ElMessage.error(extractErrorMessage(error, '获取任务状态失败，请稍后重试'))
     stopPolling()
     taskStatus.value = 'failed'
     taskError.value = extractErrorMessage(error)
+    isSubmitting.value = false
   }
 }
 
@@ -628,39 +784,138 @@ const handleGenerate = async () => {
   try {
     const payload = buildGeneratePayload()
     isSubmitting.value = true
+    extractPollingActive.value = true
 
-    // 第一步：提取功能模块
-    ElMessage.info('正在提取功能模块...')
-    const extractResponse = await aiApi.extractFunctionModules({
+    // 第一步：异步提取功能模块
+    ElMessage.info('正在提交提取功能模块任务...')
+    
+    // 提交异步任务
+    const submitResponse = await aiApi.extractFunctionModulesAsync({
       requirement_doc: payload.requirement_doc,
       model_name: payload.model_name,
-      base_url: payload.base_url
+      base_url: payload.base_url,
+      task_id: payload.task_id
     })
 
-    if (extractResponse.data.code !== 0) {
-      throw new Error(extractResponse.data.message || '提取功能模块失败')
+    if (submitResponse.data.code !== 0) {
+      throw new Error(submitResponse.data.message || '提交提取任务失败')
     }
 
-    const extractData = extractResponse.data.data
-    extractedFunctionPoints.value = extractData.function_points || []
-    requirementDocForConfirm.value = extractData.requirement_doc || form.requirementDoc
-
-    if (extractedFunctionPoints.value.length === 0) {
-      ElMessage.warning('未能提取到功能模块，将直接生成测试用例')
-      // 如果没有提取到功能模块，使用原来的流程
-      await handleGenerateDirectly(payload)
-      return
+    const submitData = submitResponse.data.data
+    extractTaskId.value = submitData.task_id
+    
+    // 设置任务状态，显示进度卡片
+    taskId.value = extractTaskId.value
+    taskStatus.value = 'running'
+    taskProgress.value = 0
+    taskProgressInfo.value = {
+      stage: 'extracting_modules',
+      progress: 0,
+      message: '正在提取功能模块...'
     }
-
-    // 显示功能模块确认对话框
-    showFunctionPointsConfirm.value = true
-    ElMessage.success(`已提取到 ${extractedFunctionPoints.value.length} 个功能模块，请确认`)
+    
+    ElMessage.info('任务已提交，正在处理中...')
+    
+    // 开始轮询提取任务状态（使用统一的轮询机制）
+    startExtractPolling()
+    
   } catch (error) {
+    extractPollingActive.value = false
+    stopExtractPolling()
     console.error('生成测试用例失败:', error)
     ElMessage.error(extractErrorMessage(error, '生成测试用例失败，请稍后重试'))
     taskStatus.value = 'failed'
     taskError.value = extractErrorMessage(error)
-  } finally {
+    isSubmitting.value = false
+  }
+}
+
+// 提取任务轮询相关
+const extractPollingTimer = ref(null)
+
+const startExtractPolling = () => {
+  stopExtractPolling()
+  extractPollingTimer.value = setInterval(() => {
+    if (extractTaskId.value && extractPollingActive.value) {
+      fetchExtractTaskStatus()
+    }
+  }, POLLING_INTERVAL)
+}
+
+const stopExtractPolling = () => {
+  if (extractPollingTimer.value) {
+    clearInterval(extractPollingTimer.value)
+    extractPollingTimer.value = null
+  }
+}
+
+const fetchExtractTaskStatus = async () => {
+  if (!extractTaskId.value || !extractPollingActive.value) return
+  
+  try {
+    const response = await aiApi.getTaskStatus(extractTaskId.value)
+    if (response.data.code !== 0) {
+      return
+    }
+    
+    const taskData = response.data.data ?? {}
+    const status = taskData.status
+    
+    // 更新进度信息
+    if (taskData.progress) {
+      taskProgressInfo.value = taskData.progress
+      taskProgress.value = taskData.progress.progress || 0
+    }
+    
+    if (status === 'completed') {
+      // 任务完成，获取结果
+      extractPollingActive.value = false
+      stopExtractPolling()
+      
+      // 更新进度
+      taskProgressInfo.value = {
+        stage: 'extracting_modules',
+        progress: 100,
+        message: '功能模块提取完成'
+      }
+      taskProgress.value = 100
+      
+      const result = taskData.result
+      if (!result) {
+        throw new Error('任务完成但未返回结果')
+      }
+
+      extractedFunctionPoints.value = result.function_points || []
+      requirementDocForConfirm.value = result.requirement_doc || form.requirementDoc
+
+      if (extractedFunctionPoints.value.length === 0) {
+        ElMessage.warning('未能提取到功能模块，将直接生成测试用例')
+        // 如果没有提取到功能模块，使用原来的流程
+        const payload = buildGeneratePayload()
+        await handleGenerateDirectly(payload)
+        return
+      }
+
+      // 显示功能模块确认对话框
+      showFunctionPointsConfirm.value = true
+      ElMessage.success(`已提取到 ${extractedFunctionPoints.value.length} 个功能模块，请确认`)
+      isSubmitting.value = false
+    } else if (status === 'failed') {
+      extractPollingActive.value = false
+      stopExtractPolling()
+      taskStatus.value = 'failed'
+      taskError.value = taskData.error || '提取功能模块失败'
+      ElMessage.error(taskData.error || '提取功能模块失败')
+      isSubmitting.value = false
+    }
+    // pending 或 running 状态继续轮询，由定时器控制
+  } catch (error) {
+    console.error('获取提取任务状态失败:', error)
+    extractPollingActive.value = false
+    stopExtractPolling()
+    ElMessage.error(extractErrorMessage(error, '查询任务状态失败'))
+    taskStatus.value = 'failed'
+    taskError.value = extractErrorMessage(error)
     isSubmitting.value = false
   }
 }
@@ -669,6 +924,10 @@ const handleFunctionPointsConfirm = async (confirmData) => {
   try {
     showFunctionPointsConfirm.value = false
     isSubmitting.value = true
+    
+    // 清除提取任务ID，准备生成任务
+    extractTaskId.value = null
+    stopExtractPolling()
 
     const payload = buildGeneratePayload()
 
@@ -678,6 +937,11 @@ const handleFunctionPointsConfirm = async (confirmData) => {
     taskLogs.value = []
     taskError.value = null
     taskProgress.value = 0
+    taskProgressInfo.value = {
+      stage: 'generating_test_cases',
+      progress: 0,
+      message: '正在生成测试用例...'
+    }
     taskStatus.value = 'running'
     previousStatus.value = null
     taskMeta.value = {
@@ -695,26 +959,29 @@ const handleFunctionPointsConfirm = async (confirmData) => {
       operation_history: confirmData.operationHistory
     }
 
-    // 使用确认生成接口
-    const response = await aiApi.confirmAndGenerate(taskPayload)
+    // 使用异步生成接口
+    ElMessage.info('正在提交生成任务...')
+    const submitResponse = await aiApi.createGenerationTask(taskPayload)
 
-    if (response.data.code !== 0) {
-      throw new Error(response.data.message || '生成测试用例失败')
+    if (submitResponse.data.code !== 0) {
+      throw new Error(submitResponse.data.message || '提交生成任务失败')
     }
 
-    const resultData = response.data.data
-    result.value = resultData
-    warnings.value = deriveWarnings(resultData)
+    const submitData = submitResponse.data.data
+    const newTaskId = submitData.task_id
+    
+    if (!newTaskId) {
+      throw new Error('任务创建失败，未返回 task_id')
+    }
 
-    ElMessage.success('测试用例生成完成')
-    taskStatus.value = 'success'
-    taskProgress.value = 100
+    taskId.value = newTaskId
+    ElMessage.success('任务已提交，正在生成测试用例')
+    startPolling()
   } catch (error) {
     console.error('生成测试用例失败:', error)
     ElMessage.error(extractErrorMessage(error, '生成测试用例失败，请稍后重试'))
     taskStatus.value = 'failed'
     taskError.value = extractErrorMessage(error)
-  } finally {
     isSubmitting.value = false
   }
 }
@@ -756,10 +1023,14 @@ const handleGenerateDirectly = async (payload) => {
 
 const handleReset = () => {
   stopPolling()
+  stopExtractPolling()
   taskId.value = null
+  extractTaskId.value = null
+  extractPollingActive.value = false
   taskStatus.value = 'idle'
   previousStatus.value = null
   taskProgress.value = 0
+  taskProgressInfo.value = null
   taskLogs.value = []
   taskError.value = null
   result.value = null
@@ -792,6 +1063,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopPolling()
+  stopExtractPolling()
+  extractPollingActive.value = false // 停止提取任务轮询
 })
 </script>
 
@@ -980,9 +1253,160 @@ onBeforeUnmount(() => {
   margin-right: 4px;
 }
 
+/* 配置卡片折叠按钮 */
+.config-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.collapse-btn {
+  margin-left: auto;
+}
+
+/* 任务进度容器 */
+.task-progress-container {
+  padding: 16px 0;
+}
+
+.overall-progress {
+  margin-bottom: 24px;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.status-text {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.progress-text {
+  color: var(--el-text-color-secondary);
+}
+
+/* 阶段列表 */
+.stage-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stage-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #f5f7fa;
+  transition: all 0.3s;
+}
+
+.stage-item.stage-completed {
+  background: #f0f9ff;
+  border-left: 3px solid var(--el-color-success);
+}
+
+.stage-item.stage-running {
+  background: #fef0e6;
+  border-left: 3px solid var(--el-color-warning);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.stage-item.stage-waiting {
+  background: #f5f7fa;
+  border-left: 3px solid #e4e7ed;
+  opacity: 0.6;
+}
+
+.stage-icon {
+  margin-right: 12px;
+  font-size: 20px;
+}
+
+.stage-item.stage-completed .stage-icon {
+  color: var(--el-color-success);
+}
+
+.stage-item.stage-running .stage-icon {
+  color: var(--el-color-warning);
+  animation: rotate 2s linear infinite;
+}
+
+.stage-content {
+  flex: 1;
+}
+
+.stage-name {
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: var(--el-text-color-primary);
+}
+
+.stage-message {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.stage-progress {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  font-weight: 500;
+  margin-left: 12px;
+}
+
+/* 当前处理项 */
+.current-item {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: #ecf5ff;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-left: 3px solid var(--el-color-primary);
+}
+
+.loading-icon {
+  animation: rotate 2s linear infinite;
+}
+
+@keyframes rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.error-alert {
+  margin-top: 16px;
+}
+
+/* 结果卡片 */
+.result-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 @media screen and (max-width: 1024px) {
   .expand-section {
     flex-direction: column;
+  }
+  
+  .stage-list {
+    gap: 8px;
+  }
+  
+  .stage-item {
+    padding: 10px 12px;
   }
 }
 </style>

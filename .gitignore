@@ -17,6 +17,7 @@ sdist/
 var/
 wheels/
 *.egg-info/
+**/ai_demo_service.egg-info/
 .installed.cfg
 *.egg
 .venv/
@@ -77,11 +78,11 @@ frontend/.vite/
 frontend/.env.local
 frontend/.env.*.local
 
-# 存储目录
-backend/storage/uploads/*
-!backend/storage/uploads/.gitkeep
-backend/storage/knowledge_base/documents/*
-!backend/storage/knowledge_base/documents/.gitkeep
-backend/storage/knowledge_base/vectors/*
-!backend/storage/knowledge_base/vectors/.gitkeep
+# 存储目录（统一使用项目根目录的 storage）
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/knowledge_base/documents/*
+!storage/knowledge_base/documents/.gitkeep
+storage/knowledge_base/vectors/*
+!storage/knowledge_base/vectors/.gitkeep
 
